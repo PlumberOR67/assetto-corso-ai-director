@@ -1,0 +1,11 @@
+# Normalise line endings in the repository to LF, regardless of the platform a
+# contributor works on. Without this, a Windows checkout commits CRLF and every
+# subsequent diff on Linux shows whole files as changed.
+* text=auto eol=lf
+
+# Binary formats git must not touch.
+*.acreplay binary
+*.mp4 binary
+*.mkv binary
+*.png binary
+*.jpg binary

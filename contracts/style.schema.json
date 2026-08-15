@@ -1,0 +1,165 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/assetto-ai-director/assetto-ai-director/contracts/style.schema.json",
+  "title": "Assetto AI Director style profile",
+  "description": "A directorial style: how fast to cut, how to distribute camera behaviour, and how to value each moment. Authored as TOML — a style is meant to be read, edited and reviewed by a person, and to sit in version control where a diff shows what someone changed about the look of a cut. This schema describes the parsed document, since TOML shares JSON's data model; validate a profile by parsing it and checking the result against this file. A test does exactly that for every built-in style and every shipped profile.\n\nThe defining feature is that every tunable carries its provenance. A number cannot gain authority merely by being written down: a value declared measured must name where it was measured from, and the shorthand for a bare number resolves to a guess, never to something stronger.",
+  "type": "object",
+  "required": ["schema_version", "name", "rhythm", "camera_mix"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "description": "Bumped when the file shape changes incompatibly, so a reader can refuse rather than misinterpret.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "name": {
+      "description": "Identifier, e.g. touge_reference.",
+      "type": "string",
+      "minLength": 1
+    },
+    "description": {
+      "description": "Human-readable summary of what this style looks like.",
+      "type": "string"
+    },
+    "seed": {
+      "description": "Seed for the rhythm generator, so an edit is reproducible.",
+      "type": "integer"
+    },
+    "measured_from": {
+      "description": "Reference clips this profile's numbers were measured from. Empty for a hand-authored profile — and a profile claiming measured provenance with nothing here is a profile whose claim cannot be checked.",
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "rhythm": {
+      "description": "How this style paces its cutting.",
+      "type": "object",
+      "required": [
+        "median_shot_length",
+        "spread",
+        "spectral_slope",
+        "min_shot_length",
+        "max_shot_length"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "median_shot_length": {
+          "description": "Target median shot duration, seconds. Median, not mean, and the distinction is load-bearing: measured shot-length distributions are strongly right-skewed and sometimes bimodal. One reference clip has a 6.11 s mean against a 2.23 s median, because it is mostly short shots punctuated by a few very long ones — targeting the mean there would produce an edit resembling neither.",
+          "$ref": "#/$defs/tunable"
+        },
+        "spread": {
+          "description": "Coefficient of variation, sigma over mu. Scale-free, so it transfers between a fast style and a slow one.",
+          "$ref": "#/$defs/tunable"
+        },
+        "spectral_slope": {
+          "description": "Target log-log slope of the shot-length sequence. Zero is white noise — independent lengths, which real editing is not. Around minus one is the pink-noise structure observed in film.",
+          "$ref": "#/$defs/tunable"
+        },
+        "min_shot_length": {
+          "description": "Floor, below which a shot cannot be read.",
+          "$ref": "#/$defs/tunable"
+        },
+        "max_shot_length": {
+          "description": "Ceiling, above which a shot outstays its welcome.",
+          "$ref": "#/$defs/tunable"
+        }
+      }
+    },
+    "camera_mix": {
+      "description": "How this style distributes camera behaviour across shots. Fractions are targets rather than quotas: the scheduler weights candidate generation by them, but geometric feasibility can still override. A trackside camera that cannot see the car is not placed merely to hit a percentage — so these need not sum to one, and a validator must not require it.",
+      "type": "object",
+      "required": ["static_fraction", "axial_fraction", "track_fraction", "pan_fraction"],
+      "additionalProperties": false,
+      "properties": {
+        "static_fraction": {
+          "description": "Share of shots that should be locked off.",
+          "$ref": "#/$defs/tunable"
+        },
+        "axial_fraction": {
+          "description": "Share travelling along the optical axis — chase, bonnet, bumper, follow-drone.",
+          "$ref": "#/$defs/tunable"
+        },
+        "track_fraction": {
+          "description": "Share translating laterally alongside the subject.",
+          "$ref": "#/$defs/tunable"
+        },
+        "pan_fraction": {
+          "description": "Share rotating in place.",
+          "$ref": "#/$defs/tunable"
+        },
+        "allowed_rigs": {
+          "description": "Rigs this style permits at all. A style that forbids drones says so here rather than through a zero weight, so an unsatisfiable request fails loudly instead of silently drifting. Absent means all rigs are permitted.",
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": [
+              "static",
+              "roadside",
+              "follow",
+              "drone",
+              "helicopter",
+              "orbital",
+              "spline",
+              "interior",
+              "bonnet",
+              "roof",
+              "wheel",
+              "suspension"
+            ]
+          }
+        }
+      }
+    },
+    "weights": {
+      "description": "How this style values each moment score. These are the one part of a profile that is deliberately NOT provenance-tracked: they are editorial judgement, not measurement, and wrapping them in a tunable would let them appear in the provenance report as though they were evidence. The report names them explicitly as untracked instead.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "drift": { "type": "number" },
+        "speed": { "type": "number" },
+        "risk": { "type": "number" },
+        "flow": { "type": "number" },
+        "cinematic": { "type": "number" },
+        "legibility": { "type": "number" }
+      }
+    }
+  },
+  "$defs": {
+    "tunable": {
+      "description": "A number and where it came from. The bare-number form is shorthand for a guess — hand-editing a profile to try a value should not require writing a provenance block, but the shorthand can only ever resolve to GUESS, so convenience cannot launder an unsourced number into a measured one.",
+      "oneOf": [
+        { "type": "number" },
+        {
+          "type": "object",
+          "required": ["value", "provenance"],
+          "additionalProperties": false,
+          "properties": {
+            "value": { "type": "number" },
+            "provenance": {
+              "description": "verified: read from a primary source or the game's own data. measured: produced by this project's measurement harness from named footage. derived: computed from other tracked values. guess: judgement, and counted as such by CI.",
+              "type": "string",
+              "enum": ["verified", "measured", "derived", "guess"]
+            },
+            "source": {
+              "description": "Where the value came from. Required for anything other than a guess — a non-guess without a source is rejected at construction, because an unsourced claim of authority is the exact failure this type exists to prevent.",
+              "type": "string",
+              "minLength": 1
+            },
+            "note": {
+              "description": "Anything a later reader needs in order to judge the value.",
+              "type": "string"
+            }
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": { "provenance": { "not": { "const": "guess" } } }
+              },
+              "then": { "required": ["source"] }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

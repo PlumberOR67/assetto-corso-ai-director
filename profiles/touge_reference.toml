@@ -1,0 +1,27 @@
+schema_version = 1
+name = "touge_reference"
+description = "Measured from 9 reference clips."
+seed = 0
+measured_from = ["Akagi Midnight.mp4", "AWD_TOUGE_BATTLE!_Subaru_22B_Vs_Mitsubishi_Evo_8_Assetto_Corsa_4K.mp4", "DOGFIGHT.mp4", "FD3S (Takumi) vs R34 (Takumi) PV.mp4", "INITIAL_D_PREQUEL_STAGE_Bunta's_New_Toyota_AE86_Assetto_Corsa.mp4", "Lonely Angel.mp4", "ssstik.io_@konyaka124_1786014302480.mp4", "ULTRA_LATE_BRAKING!_Toyota_AE86_VS_Toyota_AE86_Assetto_Corsa_Cinematic.mp4", "Ultra_Realistic_Touge_Duel_–_GR86_Turbo_vs_Tuned_RX_7_Assetto_Corsa.mp4"]
+
+[rhythm]
+median_shot_length = { value = 2.1083330000000124, provenance = "measured", source = "measured: 9 clips, 344 shots" }
+spread = { value = 1.3120574143302448, provenance = "measured", source = "measured: 9 clips, 344 shots" }
+spectral_slope = { value = -0.3713150099573288, provenance = "measured", source = "measured: 9 clips, 344 shots" }
+min_shot_length = { value = 0.3500000000000014, provenance = "measured", source = "measured: 9 clips, 344 shots" }
+max_shot_length = { value = 9.683332999999976, provenance = "measured", source = "measured: 9 clips, 344 shots" }
+
+[camera_mix]
+static_fraction = { value = 0.42151162790697677, provenance = "measured", source = "measured: 9 clips, 344 shots" }
+axial_fraction = { value = 0.5552325581395349, provenance = "measured", source = "measured: 9 clips, 344 shots" }
+track_fraction = { value = 0.0, provenance = "measured", source = "measured: 9 clips, 344 shots" }
+pan_fraction = { value = 0.023255813953488372, provenance = "measured", source = "measured: 9 clips, 344 shots" }
+allowed_rigs = ["bonnet", "drone", "follow", "helicopter", "interior", "orbital", "roadside", "roof", "spline", "static", "suspension", "wheel"]
+
+[weights]
+drift = 0.2
+speed = 0.2
+risk = 0.2
+flow = 0.2
+cinematic = 0.2
+legibility = 0.5

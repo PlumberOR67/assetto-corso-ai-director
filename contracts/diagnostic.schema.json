@@ -1,0 +1,249 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/assetto-ai-director/assetto-ai-director/contracts/diagnostic.schema.json",
+  "title": "Assetto AI Director camera diagnostic",
+  "description": "What a directed cut's cameras would actually see, checked without the game. The document exists to be handed from the person who can look at the cameras to the person who can fix them, so every check carries the number it measured and the threshold it was compared against — a reader who disagrees with a threshold can still use the measurement. A test asserts that the status enumeration below matches the Python enum exactly, so the two cannot drift apart silently.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "summary",
+    "session",
+    "environment",
+    "blind_spots",
+    "assumptions",
+    "check_tally",
+    "failures",
+    "cameras_included",
+    "cameras"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "description": "Incremented when a change would break an existing reader. A reader must refuse a version it does not know rather than guess at a field's meaning.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "summary": { "$ref": "#/$defs/summary" },
+    "session": { "$ref": "#/$defs/session" },
+    "environment": { "$ref": "#/$defs/environment" },
+    "blind_spots": {
+      "description": "What could not be checked, and why, in plain sentences. Placed before the per-camera detail on purpose: a report with no failures and a long blind-spot list has not established that the cameras are good, and a reader who stops at the first screen must still learn that.",
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "assumptions": {
+      "description": "Statements the report depends on that were not verified — the nominal car size, the axis the exported field of view refers to. Listed so a result can be weighed rather than taken on faith.",
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "check_tally": {
+      "description": "Each named check counted by status across every camera, whatever `cameras_included` says. One glance distinguishes a single bad camera from a policy that is wrong everywhere, and those need different fixes.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["pass", "warn", "fail", "unknown"],
+        "additionalProperties": false,
+        "properties": {
+          "pass": { "type": "integer", "minimum": 0 },
+          "warn": { "type": "integer", "minimum": 0 },
+          "fail": { "type": "integer", "minimum": 0 },
+          "unknown": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "failures": {
+      "description": "Every camera with at least one failed check, carrying only the checks that failed. A duplicate of information in `cameras`, kept because it is the part a reader acts on. Always complete, even when `cameras` is not.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/failure" }
+    },
+    "cameras_included": {
+      "description": "Whether `cameras` holds every shot or only the ones worth looking at. The compact form exists because the full one runs to hundreds of kilobytes, which is too much to paste into a conversation — and pasting it is how this report reaches anyone. Stated explicitly so a short `cameras` array is never mistaken for a short cut.",
+      "type": "string",
+      "enum": ["all", "notable"]
+    },
+    "cameras": {
+      "description": "Per-shot diagnostics in cut order. Every shot when `cameras_included` is `all`; only those whose measured checks warned or failed when it is `notable`. The summary counts always describe the whole cut either way.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/camera" }
+    }
+  },
+  "$defs": {
+    "status": {
+      "description": "How a check or a camera came out. `unknown` means the check did not run because its inputs were unavailable — it is never a pass, and a consumer that treats it as one defeats the purpose of the document.",
+      "type": "string",
+      "enum": ["pass", "warn", "fail", "unknown"]
+    },
+    "summary": {
+      "type": "object",
+      "required": [
+        "status",
+        "measured_status",
+        "cameras",
+        "failing",
+        "warning",
+        "unmeasured",
+        "passing"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "description": "The worst verdict across every camera, counting an unrun check as unknown. Until track geometry can be read this is at best `unknown` for every camera, because two checks cannot run — which is the honest answer to 'have these cameras been shown to be good'.",
+          "$ref": "#/$defs/status"
+        },
+        "measured_status": {
+          "description": "The worst verdict counting only checks that actually ran. Answers the weaker but usable question 'is anything that could be measured wrong'. `pass` here alongside a long blind-spot list must not be read as 'the cameras are good'.",
+          "$ref": "#/$defs/status"
+        },
+        "cameras": { "type": "integer", "minimum": 0 },
+        "failing": { "type": "integer", "minimum": 0 },
+        "warning": { "type": "integer", "minimum": 0 },
+        "unmeasured": { "type": "integer", "minimum": 0 },
+        "passing": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "session": {
+      "type": "object",
+      "required": ["track", "layout", "style"],
+      "additionalProperties": false,
+      "properties": {
+        "track": { "type": "string" },
+        "layout": {
+          "description": "Empty for a track with no layouts. Assetto Corsa scopes a track's data directory by layout, so this decides which folder the checks read.",
+          "type": "string"
+        },
+        "style": { "type": "string" }
+      }
+    },
+    "environment": {
+      "description": "What the machine that produced this report had. Present because a report whose track-dependent checks are all unknown is meaningless without knowing whether the track lacks an AI line or Assetto Corsa was never found — those need opposite responses.",
+      "type": "object",
+      "required": ["assetto_corsa_found", "custom_shaders_patch"],
+      "additionalProperties": false,
+      "properties": {
+        "assetto_corsa_found": { "type": "boolean" },
+        "assetto_corsa_root": { "type": "string" },
+        "found_by": {
+          "description": "Which discovery source proposed the root. An install found by the environment variable rather than by Steam is a non-standard setup, and that is worth knowing before anything else is diagnosed.",
+          "type": "string"
+        },
+        "has_executable": {
+          "description": "False means a content copy: enough to read track data, not enough to run the game.",
+          "type": "boolean"
+        },
+        "custom_shaders_patch": {
+          "description": "The manifest's [VERSION] keys verbatim when it could be read, otherwise a sentence saying whether CSP is absent or merely unreadable. Keys are not interpreted: which one carries the patch version was not confirmed against a real install.",
+          "oneOf": [
+            { "type": "string" },
+            { "type": "object", "additionalProperties": { "type": "string" } }
+          ]
+        },
+        "track_files": { "$ref": "#/$defs/track_files" }
+      }
+    },
+    "track_files": {
+      "type": "object",
+      "required": ["directory", "present", "missing"],
+      "additionalProperties": false,
+      "properties": {
+        "directory": { "type": "string" },
+        "present": {
+          "description": "File name to size in bytes. Sizes travel because a zero-byte fast_lane.ai is a real thing that happens to modded tracks, and it is not the same as a present one.",
+          "type": "object",
+          "additionalProperties": { "type": "integer", "minimum": 0 }
+        },
+        "missing": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "failure": {
+      "type": "object",
+      "required": ["shot", "at", "rig", "failed"],
+      "additionalProperties": false,
+      "properties": {
+        "shot": { "type": "integer", "minimum": 0 },
+        "at": {
+          "description": "When the shot begins, seconds from session start.",
+          "type": "number"
+        },
+        "rig": { "type": "string" },
+        "failed": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["check", "value", "detail"],
+            "additionalProperties": false,
+            "properties": {
+              "check": { "type": "string" },
+              "value": { "type": ["number", "null"] },
+              "detail": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "camera": {
+      "type": "object",
+      "required": [
+        "shot",
+        "status",
+        "start",
+        "end",
+        "rig",
+        "size",
+        "side",
+        "subjects",
+        "position",
+        "look",
+        "fov",
+        "checks"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "shot": { "type": "integer", "minimum": 0 },
+        "status": { "$ref": "#/$defs/status" },
+        "start": { "type": "number" },
+        "end": { "type": "number" },
+        "rig": { "type": "string" },
+        "size": { "type": "string" },
+        "side": { "type": "string" },
+        "subjects": { "type": "array", "items": { "type": "integer" } },
+        "position": { "$ref": "#/$defs/vec3" },
+        "look": { "$ref": "#/$defs/vec3" },
+        "fov": {
+          "description": "Vertical field of view in degrees at the middle of the shot, matching this project's convention and CSP's GrabbedCamera.fov.",
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "checks": { "type": "array", "items": { "$ref": "#/$defs/check" } }
+      }
+    },
+    "check": {
+      "type": "object",
+      "required": ["name", "status", "value", "unit", "threshold", "detail"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "description": "Stable snake-case identifier. Stable because reports get diffed between runs, and a renamed check reads as a check that vanished.",
+          "type": "string"
+        },
+        "status": { "$ref": "#/$defs/status" },
+        "value": {
+          "description": "What was measured, or null when the check did not run. Null rather than zero: an unmeasured value must not be confusable with a measured one that happened to be zero.",
+          "type": ["number", "null"]
+        },
+        "unit": { "type": "string" },
+        "threshold": {
+          "description": "The comparison in words. Written out rather than stored as numbers because several checks compare against a band rather than a single bound.",
+          "type": "string"
+        },
+        "detail": { "type": "string" }
+      }
+    },
+    "vec3": {
+      "description": "Assetto Corsa world axes in metres, y up.",
+      "type": "array",
+      "items": { "type": "number" },
+      "minItems": 3,
+      "maxItems": 3
+    }
+  }
+}

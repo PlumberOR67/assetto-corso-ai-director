@@ -1,0 +1,308 @@
+[project]
+name = "assetto-ai-director"
+version = "0.1.0"
+description = "AI cinematographer for Assetto Corsa: analyses a session and directs a cinematic camera timeline."
+readme = "README.md"
+requires-python = ">=3.12,<3.15"
+license = "MIT"
+authors = [{ name = "Assetto AI Director contributors" }]
+keywords = ["assetto-corsa", "sim-racing", "telemetry", "cinematography", "replay", "mcp"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Games/Entertainment :: Simulation",
+    "Topic :: Multimedia :: Video",
+    "Topic :: Scientific/Engineering :: Visualization",
+    "Typing :: Typed",
+]
+
+dependencies = [
+    "numpy>=2.1",
+    "scipy>=1.14",
+    "pydantic>=2.9",
+    "loguru>=0.7.2",
+    "rich>=13.9",
+    "typer>=0.15",
+]
+
+[project.optional-dependencies]
+gui = ["PySide6>=6.9,<7"]
+mcp = ["mcp>=2.0,<3"]
+measure = ["opencv-python-headless>=4.10", "scenedetect>=0.6.4"]
+
+[project.scripts]
+aidirector = "assetto_ai_director.presentation.cli.main:app"
+aidirector-mcp = "assetto_ai_director.mcp.server:main"
+# A console entry point rather than a GUI one, on purpose: on Windows a
+# gui-script detaches from the terminal, so a startup traceback vanishes with it
+# and the user sees a window that never appears and no reason why.
+aidirector-gui = "assetto_ai_director.presentation.gui.app:main"
+
+# ---------------------------------------------------------------------------
+# Plugin entry-point groups. Five kinds, per the project's plugin contract:
+#
+#   assetto_ai_director.replay_providers
+#   assetto_ai_director.telemetry_providers
+#   assetto_ai_director.camera_packs
+#   assetto_ai_director.style_packs
+#   assetto_ai_director.exporters
+#
+# Third parties register against these group names. Built-in implementations are
+# registered here as each one lands, rather than declared up front — an entry
+# point pointing at a module that does not exist yet fails only when something
+# tries to load it, which is exactly the kind of deferred breakage this project
+# is built to avoid.
+# ---------------------------------------------------------------------------
+[project.entry-points."assetto_ai_director.telemetry_providers"]
+synthetic = "assetto_ai_director.infrastructure.synthetic.source:SyntheticSource"
+
+[project.entry-points."assetto_ai_director.exporters"]
+json = "assetto_ai_director.infrastructure.export.json_timeline:JsonTimelineSink"
+cameras-ini = "assetto_ai_director.infrastructure.export.cameras_ini:CamerasIniSink"
+
+[project.entry-points."assetto_ai_director.style_packs"]
+builtin = "assetto_ai_director.application.director.styles:BUILTIN_STYLES"
+
+[project.urls]
+Homepage = "https://github.com/assetto-ai-director/assetto-ai-director"
+Issues = "https://github.com/assetto-ai-director/assetto-ai-director/issues"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-cov>=6.0",
+    "hypothesis>=6.115",
+    "ruff>=0.8",
+    "mypy>=1.13",
+    "import-linter>=2.1",
+    "scipy-stubs>=1.14; python_version < '3.14'",
+    "jsonschema>=4.26.0",
+    "types-jsonschema>=4.26.0.20260518",
+]
+gui-dev = ["pytest-qt>=4.4"]
+
+# Everything the GUI, the MCP server and the measurement harness need, so that
+# working in this checkout means having all of it — see the [tool.uv] note below
+# for why this exists alongside the extras rather than instead of them.
+local = ["assetto-ai-director[gui,mcp,measure]"]
+
+# ---------------------------------------------------------------------------
+# uv re-resolves the environment on every `uv run`, down to whatever the default
+# set is. Without this, `uv sync --all-extras` followed by `uv run aidirector-gui`
+# is self-defeating: the sync installs PySide6 and the run promptly removes it,
+# and the user gets ModuleNotFoundError from a command whose dependencies they
+# just installed. Extras are not part of any default set; dependency groups can
+# be, which is why the `local` group above exists to pull them in.
+#
+# The extras stay extras, deliberately. Someone installing the published package
+# to use the CLI should not be made to take Qt, the MCP SDK and OpenCV with it.
+# This says only that *developing here* means having all three — which is true:
+# the GUI tests, the MCP tests and the measurement harness each need one.
+# ---------------------------------------------------------------------------
+[tool.uv]
+default-groups = ["dev", "gui-dev", "local"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/assetto_ai_director"]
+
+# ---------------------------------------------------------------------------
+# Ruff — replaces black + isort + flake8.
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",      # pycodestyle
+    "F",           # pyflakes
+    "I",           # isort
+    "N",           # pep8-naming
+    "D",           # pydocstyle (Google convention)
+    "UP",          # pyupgrade
+    "ANN",         # flake8-annotations (100% type hints)
+    "S",           # flake8-bandit
+    "B",           # flake8-bugbear
+    "A",           # flake8-builtins
+    "C4",          # flake8-comprehensions
+    "DTZ",         # flake8-datetimez
+    "T10",         # flake8-debugger
+    "EM",          # flake8-errmsg
+    "ISC",         # implicit-str-concat
+    "ICN",         # import-conventions
+    "G",           # flake8-logging-format
+    "PIE",         # flake8-pie
+    "PT",          # flake8-pytest-style
+    "RET",         # flake8-return
+    "SIM",         # flake8-simplify
+    "TID",         # flake8-tidy-imports
+    "ARG",         # flake8-unused-arguments
+    "PTH",         # flake8-use-pathlib
+    "PL",          # pylint
+    "TRY",         # tryceratops
+    "NPY",         # numpy-specific
+    "PERF",        # perflint
+    "FURB",        # refurb
+    "RUF",         # ruff-specific
+]
+ignore = [
+    "D107",    # __init__ docstring — covered by the class docstring
+    "ANN401",  # Any is occasionally load-bearing at plugin boundaries
+    "ISC001",  # conflicts with the formatter
+    "PLR0913", # camera/scoring functions legitimately take many parameters
+    "TRY003",  # long messages inside raise are fine and clearer here
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+# Unit constructors are `typing.NewType` calls: identity functions at runtime
+# with no allocation and no shared state. They are safe as dataclass defaults,
+# and writing `Seconds(0.0)` instead of a bare `0.0` is the whole point of
+# having units in the type system.
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = [
+    "assetto_ai_director.domain.units.Degrees",
+    "assetto_ai_director.domain.units.FovDegrees",
+    "assetto_ai_director.domain.units.Grams",
+    "assetto_ai_director.domain.units.Hertz",
+    "assetto_ai_director.domain.units.KilometresPerHour",
+    "assetto_ai_director.domain.units.Metres",
+    "assetto_ai_director.domain.units.MetresPerSecond",
+    "assetto_ai_director.domain.units.MetresPerSecondCubed",
+    "assetto_ai_director.domain.units.MetresPerSecondSquared",
+    "assetto_ai_director.domain.units.Newtons",
+    "assetto_ai_director.domain.units.NormalisedPosition",
+    "assetto_ai_director.domain.units.Radians",
+    "assetto_ai_director.domain.units.RadiansPerSecond",
+    "assetto_ai_director.domain.units.RadiansPerSecondSquared",
+    "assetto_ai_director.domain.units.ReciprocalMetres",
+    "assetto_ai_director.domain.units.Rpm",
+    "assetto_ai_director.domain.units.Score",
+    "assetto_ai_director.domain.units.Seconds",
+]
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "D", "ANN", "PLR2004", "ARG"]
+"src/assetto_ai_director/presentation/gui/**" = ["N802"]  # Qt overrides are camelCase
+# RUF001-003 flag Unicode characters that look like ASCII ones. These two files
+# exist precisely to handle such characters, so the table of them and the tests
+# that exercise it are the one place the rule has nothing useful to say.
+"src/assetto_ai_director/presentation/cli/console.py" = ["RUF001", "RUF002", "RUF003"]
+"tests/presentation/test_console.py" = ["RUF001", "RUF002", "RUF003", "SLF001"]
+
+[tool.ruff.format]
+docstring-code-format = true
+
+# ---------------------------------------------------------------------------
+# mypy — strict.
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+warn_unused_ignores = true
+disallow_any_generics = true
+disallow_untyped_defs = true
+no_implicit_reexport = true
+show_error_codes = true
+pretty = true
+files = ["src", "tests"]
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = ["scenedetect.*", "cv2.*"]
+ignore_missing_imports = true
+
+# scipy-stubs does not publish for 3.14, so the dev group's marker excludes it
+# there and mypy then reports scipy as unstubbed. Without this, `uv run mypy`
+# fails on an interpreter this project's own `requires-python` claims to support.
+# It does not weaken anything on 3.12 or 3.13: where the stubs are installed they
+# are still used, and this only suppresses the complaint when they are not.
+[[tool.mypy.overrides]]
+module = ["scipy.*"]
+ignore_missing_imports = true
+
+# ---------------------------------------------------------------------------
+# pytest
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = "-ra --strict-markers --strict-config"
+markers = [
+    "fixtures: requires real .acreplay files in replays/ (skipped when absent)",
+    "gui: requires PySide6 (runs headless via QT_QPA_PLATFORM=offscreen)",
+    "slow: parses full multi-hundred-MB replays",
+]
+filterwarnings = ["error"]
+
+[tool.coverage.run]
+source = ["src/assetto_ai_director"]
+branch = true
+
+[tool.coverage.report]
+exclude_also = ["if TYPE_CHECKING:", "raise NotImplementedError", "@overload", "\\.\\.\\."]
+
+# ---------------------------------------------------------------------------
+# import-linter — mechanically enforces Clean Architecture.
+# This is what makes "no circular imports" and the layer rule real rather than
+# aspirational. CI runs `lint-imports`.
+# ---------------------------------------------------------------------------
+[tool.importlinter]
+root_package = "assetto_ai_director"
+# Required because the contracts below forbid external packages (Qt, MCP, SciPy)
+# in the inner layers, not just internal ones.
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "Clean Architecture layers"
+type = "layers"
+layers = [
+    "assetto_ai_director.presentation",
+    "assetto_ai_director.mcp",
+    "assetto_ai_director.infrastructure",
+    "assetto_ai_director.application",
+    "assetto_ai_director.domain",
+]
+
+[[tool.importlinter.contracts]]
+name = "Domain is independent of every other layer"
+type = "forbidden"
+source_modules = ["assetto_ai_director.domain"]
+forbidden_modules = [
+    "assetto_ai_director.application",
+    "assetto_ai_director.infrastructure",
+    "assetto_ai_director.presentation",
+    "assetto_ai_director.mcp",
+]
+
+[[tool.importlinter.contracts]]
+name = "Domain does no I/O and knows nothing of Qt"
+type = "forbidden"
+source_modules = ["assetto_ai_director.domain"]
+forbidden_modules = ["PySide6", "mcp", "cv2", "scenedetect", "typer", "loguru", "scipy"]
+
+[[tool.importlinter.contracts]]
+name = "Application is framework-free"
+type = "forbidden"
+source_modules = ["assetto_ai_director.application"]
+forbidden_modules = ["PySide6", "mcp", "typer", "cv2", "scenedetect"]
+
+[[tool.importlinter.contracts]]
+name = "Ports declare contracts only, never concrete infrastructure"
+type = "forbidden"
+source_modules = ["assetto_ai_director.application.ports"]
+forbidden_modules = ["assetto_ai_director.infrastructure"]

@@ -1,0 +1,339 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/assetto-ai-director/assetto-ai-director/contracts/timeline.schema.json",
+  "title": "Assetto AI Director timeline",
+  "description": "The canonical output of the director: a shot list with the camera path for each shot, the event that motivated it, and the caveats of the analysis that produced it. This file is the contract other tools may build against; the Python types are an implementation of it, not the other way round. A test asserts that every enumeration below matches the corresponding Python enum exactly, so the two cannot drift apart silently.",
+  "type": "object",
+  "required": ["schema_version", "style", "session", "summary", "notes", "shots", "cuts"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "description": "Incremented when a change would break an existing reader. A reader must refuse a version it does not know rather than guess at a field's meaning.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "style": {
+      "description": "Name of the style profile that directed this edit.",
+      "type": "string",
+      "minLength": 1
+    },
+    "session": { "$ref": "#/$defs/session" },
+    "summary": { "$ref": "#/$defs/summary" },
+    "notes": {
+      "description": "What the analysis could not see. Present in every export, including exports of a session with nothing to report, so a consumer never has to infer completeness from a confident-looking file.",
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "shots": {
+      "description": "The edit, in time order. Shots tile the directed span without gaps or overlaps.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/shot" }
+    },
+    "cuts": {
+      "description": "The transitions between shots. One fewer than the shot count for a non-empty edit.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/cut" }
+    }
+  },
+  "$defs": {
+    "session": {
+      "type": "object",
+      "required": ["track", "layout", "weather", "sample_rate_hz", "recording_quality", "cars"],
+      "additionalProperties": false,
+      "properties": {
+        "track": {
+          "description": "Track folder name, e.g. pk_akina.",
+          "type": "string"
+        },
+        "layout": {
+          "description": "Track layout name. Empty for tracks with a single layout. Load-bearing for cameras.ini export, whose data directory is layout-scoped.",
+          "type": "string"
+        },
+        "weather": { "type": "string" },
+        "sample_rate_hz": {
+          "description": "The session's recording rate. This is the ceiling on how precisely any event can be placed: no analysis recovers timing the file never stored.",
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "recording_quality": {
+          "description": "This project's judgement about what that rate can support, not a Kunos classification.",
+          "type": "string",
+          "enum": ["unusable", "coarse", "good", "excellent"]
+        },
+        "cars": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/car" }
+        }
+      }
+    },
+    "car": {
+      "type": "object",
+      "required": ["id", "model", "driver", "skin", "is_player"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "description": "Index within the session, and the key every shot's subjects refer to.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "model": { "type": "string", "minLength": 1 },
+        "driver": {
+          "description": "Null rather than an empty string for an unnamed AI entry, so a placeholder is never mistaken for a real name.",
+          "type": ["string", "null"]
+        },
+        "skin": { "type": ["string", "null"] },
+        "is_player": { "type": "boolean" }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "required": ["shot_count", "duration_s", "average_shot_length_s", "tiles_without_gaps"],
+      "additionalProperties": false,
+      "properties": {
+        "shot_count": { "type": "integer", "minimum": 0 },
+        "duration_s": { "type": "number", "minimum": 0 },
+        "average_shot_length_s": { "type": "number", "minimum": 0 },
+        "tiles_without_gaps": {
+          "description": "Whether the shots cover the directed span with no gap and no overlap. False indicates a bug in the scheduler, and is exported rather than suppressed so it is visible to whoever consumes the file.",
+          "type": "boolean"
+        }
+      }
+    },
+    "shot": {
+      "type": "object",
+      "required": [
+        "index",
+        "start_s",
+        "end_s",
+        "duration_s",
+        "subjects",
+        "rig",
+        "size",
+        "side",
+        "score",
+        "camera"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "index": { "type": "integer", "minimum": 0 },
+        "start_s": { "type": "number", "minimum": 0 },
+        "end_s": { "type": "number", "minimum": 0 },
+        "duration_s": { "type": "number", "exclusiveMinimum": 0 },
+        "subjects": {
+          "description": "Car ids this shot frames. One for a single-subject shot, two for a two-car framing.",
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "integer", "minimum": 0 }
+        },
+        "rig": { "$ref": "#/$defs/rig" },
+        "size": {
+          "description": "Apparent subject size, in the standard shot-size vocabulary.",
+          "type": "string",
+          "enum": ["extreme_close_up", "close_up", "medium", "full", "long", "extreme_long"]
+        },
+        "side": {
+          "description": "Which side of the line of action the camera sits on. Continuity requires that consecutive shots of the same subject do not cross it.",
+          "type": "string",
+          "enum": ["left", "right", "neutral"]
+        },
+        "score": {
+          "description": "The candidate's score at selection time. Comparable within one edit; not an absolute quality measure.",
+          "type": "number"
+        },
+        "camera": { "$ref": "#/$defs/camera" },
+        "because": {
+          "description": "The event that motivated this shot. Absent for a shot placed to maintain pace rather than to cover a moment — which is a real editorial decision, not a gap in the data.",
+          "$ref": "#/$defs/because"
+        }
+      }
+    },
+    "because": {
+      "type": "object",
+      "required": ["event", "at_s", "severity", "confidence", "detail"],
+      "additionalProperties": false,
+      "properties": {
+        "event": {
+          "type": "string",
+          "enum": [
+            "corner_entry",
+            "apex",
+            "corner_exit",
+            "braking_point",
+            "trail_braking",
+            "drift_start",
+            "drift_sustain",
+            "drift_end",
+            "drift_transition",
+            "countersteer",
+            "overtake_attempt",
+            "overtake_complete",
+            "defence",
+            "contact",
+            "off_track",
+            "near_limit",
+            "spin",
+            "gear_change",
+            "redline"
+          ]
+        },
+        "at_s": { "type": "number", "minimum": 0 },
+        "severity": {
+          "type": "string",
+          "enum": ["subtle", "moderate", "strong"]
+        },
+        "confidence": {
+          "description": "How sure the detector is. Below 1.0 means the signal was ambiguous, not that the event was mild — severity carries that.",
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "detail": {
+          "description": "Detector-specific measurements, e.g. peak slip angle. Keys vary by event kind and are not part of this contract.",
+          "type": "object",
+          "additionalProperties": { "type": "number" }
+        }
+      }
+    },
+    "camera": {
+      "type": "object",
+      "required": [
+        "rig",
+        "fov_degrees_vertical",
+        "fov_near",
+        "fov_far",
+        "smoothing_s",
+        "shake_amplitude_m",
+        "max_speed_mps",
+        "keyframes"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "rig": { "$ref": "#/$defs/rig" },
+        "fov_degrees_vertical": {
+          "description": "Vertical field of view. Vertical, explicitly: Assetto Corsa's camera FOV is vertical, and treating a horizontal figure as one produces a lens roughly 30 percent wider than intended at 16:9.",
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 180
+        },
+        "fov_near": {
+          "description": "FOV when the subject is closest. Null for a fixed lens. Carried explicitly because without it a round trip loses zoom tracking and the cameras.ini exporter silently writes MIN_FOV equal to MAX_FOV.",
+          "type": ["number", "null"],
+          "exclusiveMinimum": 0
+        },
+        "fov_far": {
+          "description": "FOV when the subject is furthest. Null for a fixed lens.",
+          "type": ["number", "null"],
+          "exclusiveMinimum": 0
+        },
+        "smoothing_s": {
+          "description": "Time constant of the camera's damping, seconds. Expressed as a time rather than a per-frame coefficient so it is independent of the session's sampling rate.",
+          "type": "number",
+          "minimum": 0
+        },
+        "shake_amplitude_m": { "type": "number", "minimum": 0 },
+        "max_speed_mps": {
+          "description": "Speed cap for a moving rig. Null when uncapped.",
+          "type": ["number", "null"],
+          "minimum": 0
+        },
+        "keyframes": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/keyframe" }
+        }
+      }
+    },
+    "keyframe": {
+      "type": "object",
+      "required": ["t", "position", "look", "up", "fov", "own_share"],
+      "additionalProperties": false,
+      "properties": {
+        "t": {
+          "description": "Time from the start of the session, seconds — not from the start of the shot.",
+          "type": "number",
+          "minimum": 0
+        },
+        "position": { "$ref": "#/$defs/vec3" },
+        "look": {
+          "description": "A unit direction, not a target point. That is what Custom Shaders Patch's GrabbedCamera consumes, and the conversion is lossy in the other order: a target yields a direction, but recovering a target from a direction needs a distance nothing records.",
+          "$ref": "#/$defs/vec3"
+        },
+        "up": { "$ref": "#/$defs/vec3" },
+        "fov": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 180
+        },
+        "own_share": {
+          "description": "For a two-subject framing, how much of the frame this shot's primary subject occupies relative to the secondary. 1.0 for a single-subject shot.",
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "dof_distance": {
+          "description": "Focus distance in metres. Present only when the shot uses depth of field.",
+          "type": "number",
+          "minimum": 0
+        },
+        "dof_factor": {
+          "description": "Strength of the effect. Present only alongside dof_distance.",
+          "type": "number",
+          "minimum": 0
+        }
+      },
+      "dependentRequired": {
+        "dof_distance": ["dof_factor"],
+        "dof_factor": ["dof_distance"]
+      }
+    },
+    "cut": {
+      "type": "object",
+      "required": ["time_s", "kind", "duration_s", "from_shot", "to_shot", "speed_factor"],
+      "additionalProperties": false,
+      "properties": {
+        "time_s": { "type": "number", "minimum": 0 },
+        "kind": {
+          "type": "string",
+          "enum": ["cut", "dissolve", "whip", "speed_ramp", "fade"]
+        },
+        "duration_s": {
+          "description": "Length of the transition. Zero for a hard cut.",
+          "type": "number",
+          "minimum": 0
+        },
+        "from_shot": { "type": "integer", "minimum": 0 },
+        "to_shot": { "type": "integer", "minimum": 0 },
+        "speed_factor": {
+          "description": "Playback rate through the transition. 1.0 is real time; below 1.0 is slow motion.",
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      }
+    },
+    "rig": {
+      "description": "The twelve camera rigs this director can place.",
+      "type": "string",
+      "enum": [
+        "static",
+        "roadside",
+        "follow",
+        "drone",
+        "helicopter",
+        "orbital",
+        "spline",
+        "interior",
+        "bonnet",
+        "roof",
+        "wheel",
+        "suspension"
+      ]
+    },
+    "vec3": {
+      "description": "Assetto Corsa world axes in metres, y up.",
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": { "type": "number" }
+    }
+  }
+}

@@ -1,0 +1,154 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/assetto-ai-director/assetto-ai-director/contracts/terrain_scan.schema.json",
+  "title": "Assetto AI Director terrain scan",
+  "description": "A grid of terrain measurements sampled across a track, produced by the CSP Lua scanner. Each cell records the ground height, surface normal, and whether sight to the track centreline is clear. The file is self-verifying: point count must match actual data size, station spacing must be consistent, and all values must be within plausible bounds.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "track_id",
+    "layout",
+    "scan_metadata",
+    "grid"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "description": "Incremented when a change would break an existing reader. A reader must refuse a version it does not know rather than guess at a field's meaning.",
+      "type": "integer",
+      "minimum": 1,
+      "const": 1
+    },
+    "track_id": {
+      "description": "Track folder name, e.g. pk_akina.",
+      "type": "string",
+      "minLength": 1
+    },
+    "layout": {
+      "description": "Track layout name. Empty for tracks with a single layout.",
+      "type": "string"
+    },
+    "scan_metadata": {
+      "type": "object",
+      "required": [
+        "station_count",
+        "profile_points_per_station",
+        "station_spacing_m",
+        "profile_spacing_m",
+        "profile_range_m",
+        "total_cells",
+        "csp_version",
+        "scanned_at"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "station_count": {
+          "description": "Number of stations along the track.",
+          "type": "integer",
+          "minimum": 2
+        },
+        "profile_points_per_station": {
+          "description": "Number of lateral profile points per station.",
+          "type": "integer",
+          "minimum": 2
+        },
+        "station_spacing_m": {
+          "description": "Approximate distance between stations in metres.",
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "profile_spacing_m": {
+          "description": "Lateral spacing between profile points in metres.",
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "profile_range_m": {
+          "description": "Total lateral range from -40 to +40 metres.",
+          "type": "number",
+          "const": 80.0
+        },
+        "total_cells": {
+          "description": "Expected total number of grid cells (station_count * profile_points_per_station). Must match actual grid array length.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "csp_version": {
+          "description": "Custom Shaders Patch version that performed the scan.",
+          "type": "string",
+          "minLength": 1
+        },
+        "scanned_at": {
+          "description": "ISO 8601 timestamp when scan completed.",
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "grid": {
+      "description": "Grid cells in row-major order: stations outer loop, profile points inner loop.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/grid_cell" },
+      "minItems": 1
+    }
+  },
+  "$defs": {
+    "grid_cell": {
+      "type": "object",
+      "required": [
+        "station_index",
+        "profile_index",
+        "position_world",
+        "ground_height_m",
+        "surface_normal",
+        "sight_clear",
+        "sight_distance_m",
+        "measurement_quality"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "station_index": {
+          "description": "Which station this cell belongs to (0-based).",
+          "type": "integer",
+          "minimum": 0
+        },
+        "profile_index": {
+          "description": "Which profile point within the station (0-based).",
+          "type": "integer",
+          "minimum": 0
+        },
+        "position_world": {
+          "description": "World position of this measurement point in Assetto Corsa coordinates (y up).",
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "items": { "type": "number" }
+        },
+        "ground_height_m": {
+          "description": "Ground elevation at this point in metres (y coordinate). Null if ray:physics missed.",
+          "type": ["number", "null"]
+        },
+        "surface_normal": {
+          "description": "Surface normal vector from ray:physics. Null if measurement failed.",
+          "type": ["array", "null"],
+          "minItems": 3,
+          "maxItems": 3,
+          "items": { "type": "number" }
+        },
+        "sight_clear": {
+          "description": "Whether sight line from this point to track centreline is unobstructed. Null if not measured.",
+          "type": ["boolean", "null"]
+        },
+        "sight_distance_m": {
+          "description": "Distance from this point to where sight ray hit track or terrain. Null if not measured.",
+          "type": ["number", "null"],
+          "minimum": 0
+        },
+        "measurement_quality": {
+          "description": "Quality indicator: VERIFIED (both physics and track rays succeeded), DERIVED (one succeeded with interpolation), MEASURED (raw ray data), GUESS (interpolated from neighbors), UNKNOWN (measurement failed).",
+          "type": "string",
+          "enum": ["VERIFIED", "DERIVED", "MEASURED", "GUESS", "UNKNOWN"]
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,101 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A new push to the same branch makes the previous run irrelevant.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Qt has no display in CI. Without this every GUI import aborts the process
+  # rather than raising something a test could catch.
+  QT_QPA_PLATFORM: offscreen
+
+jobs:
+  gate:
+    name: ${{ matrix.os }} · py${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Windows because that is where Assetto Corsa runs and where every
+        # contributor with replays will be; Linux because that is where CI and
+        # most contributors' editors are. The path handling differs enough
+        # between them that testing one proves little about the other.
+        os: [ubuntu-latest, windows-latest]
+        # Every version `requires-python` claims. A claimed version that CI does
+        # not run is a claim with nothing behind it — and 3.14 is where a fresh
+        # `uv sync` lands by default, so it is the version a new contributor is
+        # most likely to be on.
+        python: ["3.12", "3.13", "3.14"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Set up Python
+        run: uv python install ${{ matrix.python }}
+
+      - name: Sync dependencies
+        run: uv sync --frozen
+
+      - name: Format check
+        run: uv run ruff format --check .
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Type check
+        # No path argument: the scope is the one declared in pyproject.toml, so
+        # `uv run mypy` locally checks exactly what CI checks. Passing `src` here
+        # while the config said `["src", "tests"]` meant a fresh clone failed a
+        # command the config invited people to run.
+        run: uv run mypy
+
+      - name: Architecture contracts
+        # The layer boundaries are executable, not aspirational: a circular
+        # import or a domain module reaching for Qt fails the build here rather
+        # than surviving to code review.
+        run: uv run lint-imports
+
+      - name: Tests
+        # Replay fixtures are user-owned and not in the repository, so the
+        # fixture-marked tests skip here. The synthetic provider is what keeps
+        # this run meaningful rather than merely green.
+        run: uv run pytest -q --cov=assetto_ai_director --cov-report=term-missing
+
+  provenance:
+    name: Provenance audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Sync dependencies
+        # Without the `local` group, so this job runs on the CLI's *published*
+        # dependency set: no Qt, no MCP SDK, no OpenCV. That makes it a standing
+        # check that the command-line tool does not quietly acquire a dependency
+        # on a graphical toolkit — which is easy to do by accident and only shows
+        # up for the user who installed the package to use it over SSH.
+        run: uv sync --frozen --no-group local
+
+      - name: Report which style numbers are still guesses
+        # Informational, not a gate. Guesses are legitimate — a director has to
+        # pick something — but they must stay visible, and a silent drift toward
+        # more of them is exactly what this catches.
+        run: uv run aidirector styles --provenance
