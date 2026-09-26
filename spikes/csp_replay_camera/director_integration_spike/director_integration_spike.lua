@@ -568,26 +568,26 @@ local function getCameraStylePolicy(eventType, importance)
   if eventType == 'BRAKING' then
     -- Show car decelerating into camera: medium/wide, preferred oncoming, elevated
     policy.angle_weights = { oncoming = 16, side_pan = 6, receding = -8 }
-    policy.category_weights = { elevated = 14, roadside = 11, high = 8, low = 2, wide = 3 }
+    policy.category_weights = { elevated = 16, high = 12, roadside = 8, low = 2, wide = 3 }
     policy.preferred_dist_min = 18.0
-    policy.preferred_dist_max = 32.0
-    policy.target_duration = 3.0
+    policy.preferred_dist_max = 34.0
+    policy.target_duration = 3.2
 
   elseif eventType == 'TURN_IN' then
     -- Dynamic steering pitch: side_pan / elevated / roadside
     policy.angle_weights = { side_pan = 14, oncoming = 10, receding = -4 }
-    policy.category_weights = { roadside = 13, elevated = 11, low = 6, high = 4, wide = 2 }
-    policy.preferred_dist_min = 12.0
-    policy.preferred_dist_max = 24.0
-    policy.target_duration = 2.4
+    policy.category_weights = { elevated = 16, roadside = 9, low = 3, high = 10, wide = 2 }
+    policy.preferred_dist_min = 14.0
+    policy.preferred_dist_max = 26.0
+    policy.target_duration = 2.8
 
   elseif eventType == 'CORNER' then
-    -- Show curvature arc and drift angle: side_pan / elevated
-    policy.angle_weights = { side_pan = 15, oncoming = 8, receding = 4 }
-    policy.category_weights = { elevated = 14, roadside = 10, low = 5, high = 8, wide = 3 }
-    policy.preferred_dist_min = 15.0
-    policy.preferred_dist_max = 28.0
-    policy.target_duration = 3.2
+    -- Show curvature arc and drift angle: side_pan / elevated / high
+    policy.angle_weights = { side_pan = 15, oncoming = 9, receding = 6 }
+    policy.category_weights = { elevated = 18, high = 14, roadside = 8, low = 2, wide = 4 }
+    policy.preferred_dist_min = 16.0
+    policy.preferred_dist_max = 34.0
+    policy.target_duration = 3.8
 
   elseif eventType == 'APEX' then
     -- Dramatic low curb shot clipping apex!
@@ -824,7 +824,7 @@ local function evaluateCutDecision(currentFrame, replayTime, currentShot, drivin
                           (drivingEvent.event_type == 'ACCELERATION') or
                           (drivingEvent.event_type == 'CRUISE')
 
-  local cooldownSec = isStraightState and 1.8 or 1.1
+  local cooldownSec = isStraightState and 2.0 or 1.6
 
   local camPos = vec3(currentShot.camera_position[1], currentShot.camera_position[2], currentShot.camera_position[3])
   local carPos = state.samples[#state.samples].pos
@@ -850,7 +850,9 @@ local function evaluateCutDecision(currentFrame, replayTime, currentShot, drivin
     end
   else
     if currentShot.category == 'high' then
-      maxAllowedDist = 55.0
+      maxAllowedDist = 60.0
+    elseif currentShot.category == 'elevated' then
+      maxAllowedDist = 48.0
     else
       maxAllowedDist = 42.0
     end
@@ -866,17 +868,38 @@ local function evaluateCutDecision(currentFrame, replayTime, currentShot, drivin
   end
 
   -- Reason A: Visibility Lost / Out of distance range
-  if dist > maxAllowedDist or dist < 2.5 or state.los_occluded_frames >= 4 then
+  local occlusionThreshold = (state.macro_state == 'CORNER_SEQUENCE') and 5 or 4
+  if dist > maxAllowedDist or dist < 2.5 or state.los_occluded_frames >= occlusionThreshold then
     return true, 'VISIBILITY_LOST'
   end
 
   -- Reason B: Significant Driving Event Change
-  local minShotDur = (currentShot.event_type == 'APEX') and MIN_SHOT_DURATION_APEX or MIN_SHOT_DURATION_DEFAULT
-  if isStraightState then
-    minShotDur = math.max(minShotDur, 2.4) -- allow acceleration to breathe
-  end
-  if drivingEvent.event_type ~= currentShot.event_type and timeInShot >= minShotDur then
-    if drivingEvent.importance >= 0.58 and drivingEvent.duration >= 0.25 then
+  if drivingEvent.event_type ~= currentShot.event_type then
+    local allowEventCut = false
+
+    if state.macro_state == 'STRAIGHT_RUN' then
+      local minShotDur = isStraightState and 2.5 or MIN_SHOT_DURATION_DEFAULT
+      if timeInShot >= minShotDur and drivingEvent.importance >= 0.60 and drivingEvent.duration >= 0.25 then
+        allowEventCut = true
+      end
+    else
+      -- Inside CORNER_SEQUENCE:
+      -- Suppress cuts caused by pedal modulations (gas tap / trail brake / slide adjustments)!
+      local isIntraCornerPedalFluctuation =
+        (currentShot.event_type == 'CORNER' and (drivingEvent.event_type == 'ACCELERATION' or drivingEvent.event_type == 'BRAKING')) or
+        (currentShot.event_type == 'BRAKING' and drivingEvent.event_type == 'CORNER' and timeInShot < 2.8) or
+        (currentShot.event_type == 'ACCELERATION' and drivingEvent.event_type == 'CORNER')
+
+      if not isIntraCornerPedalFluctuation then
+        -- Allow cut for APEX (dramatic curb shot) or deliberate exit cut
+        local minShotDur = (currentShot.event_type == 'APEX') and MIN_SHOT_DURATION_APEX or 3.0
+        if timeInShot >= minShotDur and drivingEvent.importance >= 0.65 and drivingEvent.duration >= 0.30 then
+          allowEventCut = true
+        end
+      end
+    end
+
+    if allowEventCut then
       return true, 'EVENT_CHANGE'
     end
   end
@@ -888,7 +911,7 @@ local function evaluateCutDecision(currentFrame, replayTime, currentShot, drivin
   end
 
   -- Reason D: Significantly Better Candidate Appears
-  local preferredDur = isStraightState and 3.0 or PREFERRED_SHOT_DURATION
+  local preferredDur = isStraightState and 3.2 or 3.2
   if timeInShot >= preferredDur and candidates and #candidates > 0 then
     local bestCand = candidates[1]
     if bestCand and (bestCand.calculated_score or 0) > (currentShot.final_score + SCORE_IMPROVEMENT_THRESHOLD) then
