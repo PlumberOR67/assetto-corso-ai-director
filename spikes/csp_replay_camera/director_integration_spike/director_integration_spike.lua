@@ -102,6 +102,7 @@ local state = {
   pending_state = nil,
   pending_frames = 0,
   los_occluded_frames = 0,
+  recent_cameras = {},
 
   -- Current Active Shot
   current_shot = nil,
@@ -757,32 +758,79 @@ local function scoreCandidate(c, currentShot, carPos, carLook, eventType, import
     visual_quality = 5.0
   end
 
-  -- 5. Soft Diversity Rules (Avoid Repetitive Shots)
+  -- 5. Cinematic Diversity & 30-Degree Anti-Jump-Cut Rules
   local diversity = 0.0
   if currentShot ~= nil then
-    -- Hard penalty against identical camera
+    -- A. Hard penalty against identical camera type
     if c.type == currentShot.camera_type then
-      diversity = diversity - 26.0
+      diversity = diversity - 30.0
     end
-    -- Penalty against same category
+
+    -- B. Category contrast
     if c.category == currentShot.category then
       diversity = diversity - 8.0
     else
       diversity = diversity + 6.0
     end
-    -- Side alternation preference
+
+    -- C. Track side alternation (Left vs Right)
     if c.side ~= 'center' and currentShot.side ~= 'center' then
       if c.side == currentShot.side then
-        diversity = diversity - 4.0
+        diversity = diversity - 10.0 -- penalty for staying on the same side
       else
-        diversity = diversity + 5.0
+        diversity = diversity + 8.0  -- reward crossing the axis of action
       end
     end
-    -- Angle alternation
+
+    -- D. Angle type alternation (oncoming vs receding vs side_pan)
     if currentShot.angle_type == angleType then
-      diversity = diversity - 4.0
+      diversity = diversity - 14.0 -- penalty for repeating angle type
     else
-      diversity = diversity + 6.0
+      diversity = diversity + 8.0  -- reward fresh perspective
+    end
+
+    -- E. 30-Degree / Jump-Cut Azimuth Difference Rule (in car-relative horizontal plane)
+    local curCamPos = vec3(currentShot.camera_position[1], currentShot.camera_position[2], currentShot.camera_position[3])
+    local toCurCam = v3norm(vec3(curCamPos.x - carPos.x, 0, curCamPos.z - carPos.z))
+    local flatRight = vec3(flatLook.z, 0, -flatLook.x)
+
+    local curFwd = v3dot(flatLook, toCurCam)
+    local curLat = v3dot(flatRight, toCurCam)
+    local curAzimuth = math.atan2(curLat, curFwd)
+
+    local candFwd = v3dot(flatLook, toCam)
+    local candLat = v3dot(flatRight, toCam)
+    local candAzimuth = math.atan2(candLat, candFwd)
+
+    local diffRad = math.abs(curAzimuth - candAzimuth)
+    if diffRad > math.pi then diffRad = 2 * math.pi - diffRad end
+    local diffDeg = diffRad * (180.0 / math.pi)
+
+    if diffDeg < 40.0 then
+      -- Candidate views car from nearly the exact same angle: severe jump-cut penalty!
+      diversity = diversity - 25.0
+    elseif diffDeg >= 75.0 then
+      -- Strong angular contrast: excellent cinematic cut!
+      diversity = diversity + 12.0
+    end
+
+    -- F. Corner-to-Straight Exit Transition: enforce contrasting exit shot
+    if currentShot.macro_state == 'CORNER_SEQUENCE' and state.macro_state == 'STRAIGHT_RUN' then
+      if angleType == currentShot.angle_type then
+        diversity = diversity - 18.0 -- never repeat angle on corner exit!
+      elseif angleType == 'oncoming' or c.category == 'high' then
+        diversity = diversity + 14.0 -- meet the car coming out onto the straight!
+      end
+    end
+
+    -- G. Recent Camera History Penalty (avoid A-B-A-B bouncing)
+    if state.recent_cameras then
+      for rIdx, recentType in ipairs(state.recent_cameras) do
+        if c.type == recentType then
+          local histPenalty = (rIdx == 1) and 24.0 or (rIdx == 2 and 14.0 or 6.0)
+          diversity = diversity - histPenalty
+        end
+      end
     end
   end
 
@@ -977,6 +1025,12 @@ local function executeCut(best, cutReason, currentFrame, replayTime, carPos, dri
   state.last_cut_reason = cutReason
   state.los_occluded_frames = 0
 
+  state.recent_cameras = state.recent_cameras or {}
+  table.insert(state.recent_cameras, 1, best.type)
+  while #state.recent_cameras > 3 do
+    table.remove(state.recent_cameras)
+  end
+
   ac.log(string.format('[DirectorIntegration] CUT #%02d [%s] -> %s (%s, dist=%.1fm, score=%.1f) Event: %s (imp:%.2f)',
     shotRecord.index, cutReason, best.type, best.angle_type, best.distance_to_car, best.calculated_score,
     drivingEvent.event_type, drivingEvent.importance))
@@ -1132,6 +1186,7 @@ local function startDirector()
   state.pending_state = nil
   state.pending_frames = 0
   state.los_occluded_frames = 0
+  state.recent_cameras = {}
   state.eval_count = 0
   state.eval_accepted = 0
   state.eval_rejected = 0
