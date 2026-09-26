@@ -33,17 +33,22 @@ local CAMERA_TYPES = {
   { name = 'elevated_high',         lateral = -0.80, height = 7.5, category = 'high',     side = 'center', desc = 'High crane / overhead (7.5m)' },
 }
 
--- Tight Progress Offsets: -25m to +25m focal zone
-local PROGRESS_OFFSETS = { -0.0035, -0.0018, 0.0, 0.0018, 0.0035 }
+-- Tight Progress Offsets: -30m to +40m focal zone
+local PROGRESS_OFFSETS = { -0.0040, -0.0020, 0.0, 0.0020, 0.0040, 0.0055 }
 
 -- Pacing & Cut Duration Thresholds
 local MIN_SHOT_DURATION_DEFAULT = 1.8   -- seconds
 local MIN_SHOT_DURATION_APEX = 1.2      -- seconds
 local PREFERRED_SHOT_DURATION = 2.8     -- seconds
 local MAX_SHOT_DURATION_DEFAULT = 4.2   -- seconds
-local MAX_SHOT_DURATION_CRUISE = 5.0    -- seconds
+local MAX_SHOT_DURATION_CRUISE = 5.2    -- seconds
 local CUT_COOLDOWN_S = 1.0              -- seconds
 local SCORE_IMPROVEMENT_THRESHOLD = 18.0 -- points needed for early candidate cut
+
+local DEFAULT_MIN_CONFIRM_FRAMES = 5    -- ~0.15s confirmation debounce
+local FAST_CONFIRM_FRAMES = 2           -- ~0.06s for sudden heavy braking
+local DEFAULT_MIN_DURATION_S = 0.35     -- minimum event duration before normal exit
+local APEX_MIN_DURATION_S = 0.20        -- apex is inherently transient
 
 -- ============================================================================
 -- State
@@ -92,6 +97,11 @@ local state = {
   },
   macro_state = 'STRAIGHT_RUN',  -- 'STRAIGHT_RUN' or 'CORNER_SEQUENCE'
   apex_latched = false,           -- Latch: at most ONE apex shot per corner sequence!
+
+  -- Event Hysteresis & Visibility Stabilization
+  pending_state = nil,
+  pending_frames = 0,
+  los_occluded_frames = 0,
 
   -- Current Active Shot
   current_shot = nil,
@@ -363,12 +373,113 @@ local function calculateEventImportance(etype, f)
 end
 
 -- ============================================================================
+-- Event Rule Evaluation & Confidence Scoring (Proven from event_detection_spike)
+-- ============================================================================
+
+local function evaluateEventRules(f, curEv)
+  local prevType = curEv and curEv.event_type or 'CRUISE'
+  local inCorneringSequence = (state.macro_state == 'CORNER_SEQUENCE') or
+                             (prevType == 'TURN_IN' or prevType == 'CORNER' or prevType == 'APEX')
+
+  local proposals = {}
+
+  -- 1. BRAKING: Strong negative longitudinal acceleration
+  if f.accel < -2.0 then
+    local conf = math.min(0.98, 0.60 + (math.abs(f.accel) - 2.0) * 0.09)
+    if f.accel < -4.2 then conf = math.max(0.88, conf) end
+    proposals['BRAKING'] = conf
+  end
+
+  -- 2. ACCELERATION: Positive longitudinal acceleration on exit/straight
+  if f.accel > 1.0 and f.yaw_rate < 15.0 then
+    local conf = math.min(0.96, 0.62 + (f.accel - 1.0) * 0.12)
+    if prevType == 'EXIT_CORNER' then conf = conf + 0.05 end
+    proposals['ACCELERATION'] = math.min(0.98, conf)
+  end
+
+  -- 3. TURN_IN: Rapid rise in yaw rate entering corner
+  if f.yaw_rate > 11.0 and f.yaw_accel > 5.0 and f.accel < 1.2 then
+    local conf = math.min(0.93, 0.65 + (f.yaw_rate - 11.0) * 0.015)
+    if prevType == 'BRAKING' or prevType == 'APPROACH_CORNER' or prevType == 'CRUISE' then
+      conf = conf + 0.06
+    end
+    proposals['TURN_IN'] = math.min(0.95, conf)
+  end
+
+  -- 4. APEX: Inflection / peak turn / minimum speed moment inside corner
+  if inCorneringSequence and (not state.apex_latched) and (curEv.duration or 0) >= 0.25 then
+    local isYawPeak = (f.yaw_rate > 14.0 and f.yaw_accel <= 3.0)
+    local isSpeedMin = (f.accel >= -1.0 and f.accel <= 0.8 and f.yaw_rate > 13.0)
+    if (isYawPeak or isSpeedMin) and prevType ~= 'APEX' and prevType ~= 'EXIT_CORNER' then
+      local conf = 0.84
+      if isYawPeak and isSpeedMin then conf = 0.92 end
+      proposals['APEX'] = conf
+    end
+  end
+
+  -- 5. CORNER / MID_CORNER: Sustained turning rate
+  if (f.yaw_rate > 13.0 or (f.curv_current > 0.035 and f.yaw_rate > 8.5)) and f.accel < 1.6 then
+    local conf = math.min(0.95, 0.68 + (f.yaw_rate - 13.0) * 0.012)
+    if inCorneringSequence then conf = conf + 0.05 end
+    proposals['CORNER'] = math.min(0.96, conf)
+  end
+
+  -- 6. EXIT_CORNER: Yaw rate declining out of corner
+  if (prevType == 'APEX' or prevType == 'CORNER') and f.yaw_rate < 12.0 and f.yaw_accel < 0.0 and f.accel > -1.0 then
+    local conf = math.min(0.88, 0.72 + (12.0 - f.yaw_rate) * 0.015)
+    proposals['EXIT_CORNER'] = conf
+  end
+
+  -- 7. APPROACH_CORNER: Straight road with upcoming sharp curvature ahead
+  if f.curv_ahead > 0.045 and f.curv_current < 0.025 and f.yaw_rate < 7.5 and f.speed_kmh > 45.0 and f.accel > -2.0 then
+    local conf = math.min(0.86, 0.65 + (f.curv_ahead - 0.045) * 3.5)
+    proposals['APPROACH_CORNER'] = conf
+  end
+
+  -- 8. CRUISE / STRAIGHT: Low turning, stable speed
+  if f.yaw_rate < 7.0 and math.abs(f.accel) < 1.1 and f.curv_ahead < 0.035 then
+    local conf = math.min(0.95, 0.82 + (7.0 - f.yaw_rate) * 0.018)
+    proposals['CRUISE'] = conf
+  end
+
+  -- Select proposal with highest confidence
+  local bestType = 'CRUISE'
+  local bestConf = 0.50
+
+  for etype, conf in pairs(proposals) do
+    if conf > bestConf then
+      bestType = etype
+      bestConf = conf
+    end
+  end
+
+  -- Fallback if no specific rule matched
+  if bestConf <= 0.50 then
+    if f.yaw_rate > 12.0 then
+      bestType = 'CORNER'
+      bestConf = 0.62
+    elseif f.accel > 0.8 then
+      bestType = 'ACCELERATION'
+      bestConf = 0.64
+    elseif f.accel < -1.5 then
+      bestType = 'BRAKING'
+      bestConf = 0.64
+    else
+      bestType = 'CRUISE'
+      bestConf = 0.72
+    end
+  end
+
+  return bestType, math.floor(bestConf * 100) / 100
+end
+
+-- ============================================================================
 -- Event Coalescing with Macro Sequence & Apex Latch
 -- ============================================================================
 
 local function updateDrivingPhase(f)
   local curEv = state.driving_event
-  local timeInEvent = f.t - curEv.start_time
+  local curDuration = f.t - curEv.start_time
 
   -- 1. Macro Sequence Transition Logic
   if state.macro_state == 'STRAIGHT_RUN' then
@@ -379,83 +490,64 @@ local function updateDrivingPhase(f)
     end
   elseif state.macro_state == 'CORNER_SEQUENCE' then
     -- Exit corner sequence once car is accelerating straight on open road
-    if f.accel > 1.0 and f.yaw_rate < 8.0 and f.curv_current < 0.025 and timeInEvent >= 0.8 then
+    if f.accel > 1.0 and f.yaw_rate < 8.0 and f.curv_current < 0.025 and curDuration >= 0.6 then
       state.macro_state = 'STRAIGHT_RUN'
       state.apex_latched = false
       ac.log(string.format('[DirectorIntegration] Exiting to STRAIGHT_RUN at %.2fs', f.t))
     end
   end
 
-  -- 2. Raw Proposal Evaluation
-  local propType = 'CRUISE'
-  local propConf = 0.60
-
-  if f.accel < -2.0 then
-    propType = 'BRAKING'
-    propConf = math.min(0.98, 0.62 + (math.abs(f.accel) - 2.0) * 0.09)
-  elseif f.accel > 1.2 and f.yaw_rate < 14.0 then
-    propType = 'ACCELERATION'
-    propConf = math.min(0.96, 0.64 + (f.accel - 1.2) * 0.12)
-  elseif f.yaw_rate > 12.0 and f.yaw_accel > 5.0 and f.accel < 1.0 then
-    propType = 'TURN_IN'
-    propConf = math.min(0.93, 0.66 + (f.yaw_rate - 12.0) * 0.015)
-  elseif state.macro_state == 'CORNER_SEQUENCE' and (not state.apex_latched) and
-         (curEv.event_type == 'TURN_IN' or curEv.event_type == 'CORNER') and
-         timeInEvent >= 0.35 and (f.yaw_rate > 14.0 and f.yaw_accel <= 3.0) then
-    -- APEX condition satisfied!
-    propType = 'APEX'
-    propConf = 0.86
-  elseif (f.yaw_rate > 14.0 or (f.curv_current > 0.038 and f.yaw_rate > 9.0)) and f.accel < 1.6 then
-    propType = 'CORNER'
-    propConf = math.min(0.95, 0.70 + (f.yaw_rate - 14.0) * 0.012)
-  elseif (curEv.event_type == 'APEX' or curEv.event_type == 'CORNER') and f.yaw_rate < 12.0 and f.yaw_accel < 0.0 and f.accel > -0.8 then
-    propType = 'EXIT_CORNER'
-    propConf = 0.80
-  elseif f.curv_ahead > 0.045 and f.curv_current < 0.025 and f.yaw_rate < 7.5 and f.speed_kmh > 45.0 then
-    propType = 'APPROACH_CORNER'
-    propConf = 0.78
-  else
-    propType = 'CRUISE'
-    propConf = 0.88
+  -- 2. Multi-Proposal Rule Evaluation
+  local proposedState, proposedConf = evaluateEventRules(f, curEv)
+  if proposedState == 'APEX' and state.apex_latched then
+    proposedState = 'CORNER'
   end
 
-  -- Coalesce micro-apex repeat: if apex was already latched, don't trigger again in same corner
-  if propType == 'APEX' and state.apex_latched then
-    propType = 'CORNER'
-  end
+  local importance = calculateEventImportance(proposedState, f)
 
-  local importance = calculateEventImportance(propType, f)
-
-  -- 3. Debounce State Transition
-  if propType == curEv.event_type then
-    curEv.duration = f.t - curEv.start_time
-    curEv.confidence = math.floor((0.92 * curEv.confidence + 0.08 * propConf) * 100) / 100
+  -- 3. Debounce State Machine (proven from event_detection_spike)
+  if proposedState == curEv.event_type then
+    state.pending_state = nil
+    state.pending_frames = 0
+    curEv.duration = math.floor(curDuration * 100) / 100
+    curEv.confidence = math.floor((0.92 * curEv.confidence + 0.08 * proposedConf) * 100) / 100
     curEv.importance = math.floor((0.90 * curEv.importance + 0.10 * importance) * 100) / 100
   else
-    local minEventDur = (curEv.event_type == 'APEX') and 0.25 or 0.45
-    -- Fast break-in for heavy braking
-    if propType == 'BRAKING' and f.accel < -4.0 then
-      minEventDur = 0.15
+    if proposedState == state.pending_state then
+      state.pending_frames = state.pending_frames + 1
+    else
+      state.pending_state = proposedState
+      state.pending_frames = 1
     end
 
-    if timeInEvent >= minEventDur then
-      -- Transition event!
-      if propType == 'APEX' then
-        state.apex_latched = true -- LATCH APEX!
+    local reqFrames = DEFAULT_MIN_CONFIRM_FRAMES
+    local minDur = (curEv.event_type == 'APEX') and APEX_MIN_DURATION_S or DEFAULT_MIN_DURATION_S
+
+    -- Emergency fast override for heavy braking
+    if proposedState == 'BRAKING' and f.accel < -4.0 then
+      reqFrames = FAST_CONFIRM_FRAMES
+      minDur = 0.15
+    end
+
+    if state.pending_frames >= reqFrames and curDuration >= minDur then
+      if proposedState == 'APEX' then
+        state.apex_latched = true
       end
 
       state.driving_event = {
-        event_type = propType,
-        confidence = propConf,
+        event_type = proposedState,
+        confidence = proposedConf,
         importance = importance,
         start_time = f.t,
         start_frame = f.frame,
         duration = 0.0,
       }
+      state.pending_state = nil
+      state.pending_frames = 0
       ac.log(string.format('[DirectorIntegration] Event -> %-15s (imp: %.2f, conf: %.2f) at %.2fs',
-        propType, importance, propConf, f.t))
+        proposedState, importance, proposedConf, f.t))
     else
-      curEv.duration = timeInEvent
+      curEv.duration = math.floor(curDuration * 100) / 100
     end
   end
 end
@@ -515,10 +607,10 @@ local function getCameraStylePolicy(eventType, importance)
 
   elseif eventType == 'ACCELERATION' then
     -- Pulling away on straight: receding / fly-by / high crane
-    policy.angle_weights = { receding = 15, side_pan = 9, oncoming = -4 }
-    policy.category_weights = { high = 14, elevated = 12, roadside = 8, low = 2, wide = 3 }
+    policy.angle_weights = { receding = 16, side_pan = 10, oncoming = 10 }
+    policy.category_weights = { high = 14, elevated = 12, roadside = 9, low = 2, wide = 4 }
     policy.preferred_dist_min = 18.0
-    policy.preferred_dist_max = 35.0
+    policy.preferred_dist_max = 42.0
     policy.target_duration = 3.6
 
   elseif eventType == 'APPROACH_CORNER' then
@@ -529,10 +621,10 @@ local function getCameraStylePolicy(eventType, importance)
     policy.target_duration = 3.0
 
   elseif eventType == 'CRUISE' then
-    policy.angle_weights = { oncoming = 12, side_pan = 8, receding = 4 }
-    policy.category_weights = { high = 12, elevated = 12, roadside = 8, low = 3, wide = 4 }
+    policy.angle_weights = { oncoming = 12, side_pan = 10, receding = 8 }
+    policy.category_weights = { high = 12, elevated = 12, roadside = 9, low = 3, wide = 5 }
     policy.preferred_dist_min = 18.0
-    policy.preferred_dist_max = 36.0
+    policy.preferred_dist_max = 42.0
     policy.target_duration = 4.2
   end
 
@@ -577,7 +669,8 @@ local function generateCandidates(carPos, carProgress)
       end
 
       local dist = v3dist(camPos, carPos)
-      if dist < 2.5 or dist > 38.0 then
+      local maxInitDist = (state.macro_state == 'STRAIGHT_RUN') and 45.0 or 38.0
+      if dist < 2.5 or dist > maxInitDist then
         state.eval_rejected = state.eval_rejected + 1
         goto continue_cam
       end
@@ -633,12 +726,12 @@ local function scoreCandidate(c, currentShot, carPos, carLook, eventType, import
   -- 2. Placement Base Score & Distance Fit
   local placement_score = 25.0
   local d = c.distance_to_car
-  if d >= 12.0 and d <= 28.0 then
+  if d >= 12.0 and d <= 32.0 then
     placement_score = placement_score + 18.0
   elseif d >= 6.0 and d < 12.0 then
     placement_score = placement_score + 14.0
-  elseif d > 28.0 and d <= 36.0 then
-    placement_score = placement_score + 10.0
+  elseif d > 32.0 and d <= 42.0 then
+    placement_score = placement_score + 12.0
   else
     placement_score = placement_score + 4.0
   end
@@ -726,43 +819,77 @@ local function evaluateCutDecision(currentFrame, replayTime, currentShot, drivin
 
   local timeInShot = replayTime - currentShot.start_time
 
-  -- Emergency Cooldown: Do not cut within cooldown unless visibility is completely lost
-  if timeInShot < CUT_COOLDOWN_S then
-    local camPos = vec3(currentShot.camera_position[1], currentShot.camera_position[2], currentShot.camera_position[3])
-    local carPos = state.samples[#state.samples].pos
-    local dist = v3dist(camPos, carPos)
-    local losOk = checkLineOfSight(camPos, vec3(carPos.x, carPos.y + 0.6, carPos.z))
-    if (not losOk) or dist > 44.0 or dist < 2.0 then
+  -- Determine state-dependent envelopes
+  local isStraightState = (state.macro_state == 'STRAIGHT_RUN') or
+                          (drivingEvent.event_type == 'ACCELERATION') or
+                          (drivingEvent.event_type == 'CRUISE')
+
+  local cooldownSec = isStraightState and 1.8 or 1.1
+
+  local camPos = vec3(currentShot.camera_position[1], currentShot.camera_position[2], currentShot.camera_position[3])
+  local carPos = state.samples[#state.samples].pos
+  local dist = v3dist(camPos, carPos)
+  local losOk = checkLineOfSight(camPos, vec3(carPos.x, carPos.y + 0.6, carPos.z))
+
+  -- Track consecutive occluded frames to filter 1-frame light pole / fence / brush pass
+  if not losOk then
+    state.los_occluded_frames = (state.los_occluded_frames or 0) + 1
+  else
+    state.los_occluded_frames = 0
+  end
+
+  -- Determine distance boundaries based on state & angle
+  local maxAllowedDist = 45.0
+  if isStraightState then
+    if currentShot.category == 'high' then
+      maxAllowedDist = 80.0
+    elseif currentShot.angle_type == 'receding' then
+      maxAllowedDist = 72.0
+    else
+      maxAllowedDist = 65.0
+    end
+  else
+    if currentShot.category == 'high' then
+      maxAllowedDist = 55.0
+    else
+      maxAllowedDist = 42.0
+    end
+  end
+
+  -- Emergency Cooldown: protect shot from premature cutting
+  if timeInShot < cooldownSec then
+    -- Hard safety cut only if car is dangerously close, completely out of sight (>85m), or blocked for >= 6 frames (~0.18s)
+    if dist < 1.8 or dist > 85.0 or state.los_occluded_frames >= 6 then
       return true, 'VISIBILITY_LOST'
     end
     return false, nil
   end
 
-  -- Reason A: Visibility Lost
-  local camPos = vec3(currentShot.camera_position[1], currentShot.camera_position[2], currentShot.camera_position[3])
-  local carPos = state.samples[#state.samples].pos
-  local dist = v3dist(camPos, carPos)
-  local losOk = checkLineOfSight(camPos, vec3(carPos.x, carPos.y + 0.6, carPos.z))
-  if (not losOk) or dist > 42.0 or dist < 2.5 then
+  -- Reason A: Visibility Lost / Out of distance range
+  if dist > maxAllowedDist or dist < 2.5 or state.los_occluded_frames >= 4 then
     return true, 'VISIBILITY_LOST'
   end
 
   -- Reason B: Significant Driving Event Change
-  local minDuration = (drivingEvent.event_type == 'APEX') and MIN_SHOT_DURATION_APEX or MIN_SHOT_DURATION_DEFAULT
-  if drivingEvent.event_type ~= currentShot.event_type and timeInShot >= minDuration then
-    if drivingEvent.importance >= 0.58 and drivingEvent.duration >= 0.20 then
+  local minShotDur = (currentShot.event_type == 'APEX') and MIN_SHOT_DURATION_APEX or MIN_SHOT_DURATION_DEFAULT
+  if isStraightState then
+    minShotDur = math.max(minShotDur, 2.4) -- allow acceleration to breathe
+  end
+  if drivingEvent.event_type ~= currentShot.event_type and timeInShot >= minShotDur then
+    if drivingEvent.importance >= 0.58 and drivingEvent.duration >= 0.25 then
       return true, 'EVENT_CHANGE'
     end
   end
 
   -- Reason C: Max Duration Exceeded
-  local maxDur = (drivingEvent.event_type == 'CRUISE') and MAX_SHOT_DURATION_CRUISE or MAX_SHOT_DURATION_DEFAULT
+  local maxDur = isStraightState and MAX_SHOT_DURATION_CRUISE or MAX_SHOT_DURATION_DEFAULT
   if timeInShot >= maxDur then
     return true, 'MAX_DURATION'
   end
 
   -- Reason D: Significantly Better Candidate Appears
-  if timeInShot >= PREFERRED_SHOT_DURATION and candidates and #candidates > 0 then
+  local preferredDur = isStraightState and 3.0 or PREFERRED_SHOT_DURATION
+  if timeInShot >= preferredDur and candidates and #candidates > 0 then
     local bestCand = candidates[1]
     if bestCand and (bestCand.calculated_score or 0) > (currentShot.final_score + SCORE_IMPROVEMENT_THRESHOLD) then
       return true, 'BETTER_CANDIDATE'
@@ -770,7 +897,7 @@ local function evaluateCutDecision(currentFrame, replayTime, currentShot, drivin
   end
 
   -- Reason E: Corner Sequence Ended
-  if state.macro_state == 'STRAIGHT_RUN' and currentShot.macro_state == 'CORNER_SEQUENCE' and timeInShot >= 2.0 then
+  if state.macro_state == 'STRAIGHT_RUN' and currentShot.macro_state == 'CORNER_SEQUENCE' and timeInShot >= 2.2 then
     return true, 'SEQUENCE_END'
   end
 
@@ -825,6 +952,7 @@ local function executeCut(best, cutReason, currentFrame, replayTime, carPos, dri
   state.shot_start_frame = currentFrame
   state.shot_start_time = replayTime
   state.last_cut_reason = cutReason
+  state.los_occluded_frames = 0
 
   ac.log(string.format('[DirectorIntegration] CUT #%02d [%s] -> %s (%s, dist=%.1fm, score=%.1f) Event: %s (imp:%.2f)',
     shotRecord.index, cutReason, best.type, best.angle_type, best.distance_to_car, best.calculated_score,
@@ -969,6 +1097,18 @@ local function startDirector()
   state.current_shot = nil
   state.macro_state = 'STRAIGHT_RUN'
   state.apex_latched = false
+  local curT = (state.session_start_frame or 0) / state.sample_rate
+  state.driving_event = {
+    event_type = 'CRUISE',
+    confidence = 0.90,
+    importance = 0.50,
+    start_time = curT,
+    start_frame = state.session_start_frame,
+    duration = 0,
+  }
+  state.pending_state = nil
+  state.pending_frames = 0
+  state.los_occluded_frames = 0
   state.eval_count = 0
   state.eval_accepted = 0
   state.eval_rejected = 0
