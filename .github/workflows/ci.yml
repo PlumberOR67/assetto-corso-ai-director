@@ -33,6 +33,14 @@ jobs:
         # `uv sync` lands by default, so it is the version a new contributor is
         # most likely to be on.
         python: ["3.12", "3.13", "3.14"]
+        # Coverage is measured on one job only. Tracing every line makes the
+        # suite several times slower — a Windows job took over 40 minutes with
+        # it — and the number would be the same on all six jobs anyway. The
+        # other five still run every test; they only skip the measurement.
+        include:
+          - os: ubuntu-latest
+            python: "3.12"
+            coverage: --cov=assetto_ai_director --cov-report=term-missing
 
     steps:
       - uses: actions/checkout@v4
@@ -72,7 +80,8 @@ jobs:
         # Replay fixtures are user-owned and not in the repository, so the
         # fixture-marked tests skip here. The synthetic provider is what keeps
         # this run meaningful rather than merely green.
-        run: uv run pytest -q --cov=assetto_ai_director --cov-report=term-missing
+        # `matrix.coverage` is set on one job only; elsewhere it is empty.
+        run: uv run pytest -q ${{ matrix.coverage }}
 
   provenance:
     name: Provenance audit
