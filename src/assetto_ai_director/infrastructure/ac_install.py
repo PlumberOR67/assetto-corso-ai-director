@@ -465,27 +465,40 @@ def _libraries_from_index(index: Path) -> list[Path]:
     return [Path(match.replace("\\\\", "\\")) for match in _VDF_PATH_VALUE.findall(text)]
 
 
-def _steam_path_from_registry() -> Path | None:
-    r"""Read Steam's own install path from the Windows registry.
+# Defined once per platform rather than returning early off Windows: mypy checks
+# the code as it would run on the platform it is running on, and with
+# ``warn_unreachable`` an early return makes the registry code below it an error
+# on Linux. A top-level platform check is the form mypy skips silently.
+if sys.platform == "win32":  # pragma: no cover - exercised only on Windows
 
-    Used only to seed the library search. Steam records ``SteamPath`` under
-    ``HKCU\Software\Valve\Steam``; nothing there names Assetto Corsa, so no
-    Assetto-specific registry key is invented here.
+    def _steam_path_from_registry() -> Path | None:
+        r"""Read Steam's own install path from the Windows registry.
 
-    Returns:
-        Steam's directory, or ``None`` off Windows or when the key is absent.
-    """
-    if sys.platform != "win32":
-        return None
+        Used only to seed the library search. Steam records ``SteamPath`` under
+        ``HKCU\Software\Valve\Steam``; nothing there names Assetto Corsa, so no
+        Assetto-specific registry key is invented here.
 
-    try:
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Valve\Steam") as key:
-            value, kind = winreg.QueryValueEx(key, "SteamPath")
-    except OSError:
+        Returns:
+            Steam's directory, or ``None`` when the key is absent.
+        """
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Valve\Steam") as key:
+                value, kind = winreg.QueryValueEx(key, "SteamPath")
+        except OSError:
+            return None
+        if kind != winreg.REG_SZ or not isinstance(value, str) or not value:
+            return None
+        return Path(value)
+
+else:  # pragma: no cover - exercised only off Windows
+
+    def _steam_path_from_registry() -> Path | None:
+        """Report that there is no Windows registry to read.
+
+        Returns:
+            Always ``None``: off Windows there is no registry.
+        """
         return None
-    if kind != winreg.REG_SZ or not isinstance(value, str) or not value:
-        return None
-    return Path(value)
 
 
 # --- Validation and small helpers -------------------------------------------
