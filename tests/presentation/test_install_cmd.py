@@ -176,7 +176,10 @@ class TestRefusals:
             ],
         )
         assert result.exit_code == 1
-        assert "does not exist" in result.output
+        # The message follows the full destination path, and the console wraps at
+        # 80 columns. How long that path is depends on the machine's temp folder,
+        # so the wrap can fall inside the phrase. Compare with the wraps removed.
+        assert "does not exist" in " ".join(result.output.split())
         assert not (game / "content" / "tracks" / "pk_akina" / "akina_uphill").exists()
 
     def test_no_installation_is_refused(self, cameras: Path, tmp_path: Path) -> None:
