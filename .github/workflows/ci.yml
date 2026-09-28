@@ -57,6 +57,19 @@ jobs:
       - name: Sync dependencies
         run: uv sync --frozen
 
+      - name: Install Qt's system libraries
+        # PySide6 bundles Qt itself but links against system libraries that a
+        # bare Ubuntu runner lacks: the first Linux test run died on a missing
+        # libEGL.so.1 before collecting a single test. The list comes from `ldd`
+        # on the locked PySide6 wheel (Qt Core, Gui, Widgets, Test, Svg and the
+        # offscreen platform plugin); everything else it needs is part of the
+        # base system. apt skips any package already installed.
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libegl1 libgl1 libxkbcommon0 libfontconfig1 libdbus-1-3
+
       - name: Format check
         run: uv run ruff format --check .
 
