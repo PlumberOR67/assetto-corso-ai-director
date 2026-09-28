@@ -1,0 +1,116 @@
+#!/bin/sh
+# Pre-push check for Assetto AI Director.
+#
+# Runs the fast CI checks before a push leaves this machine and reports what CI
+# on GitHub will reject. It NEVER blocks the push: the exit code is always 0.
+# The point is that the author -- a person or an AI agent reading this output --
+# learns about a red CI run now, while the fix is one command away, instead of
+# from a failure email later.
+#
+# Switch it on once per clone:
+#     git config core.hooksPath .githooks
+
+# Git writes the refs being pushed to stdin. Read them so git never sees a
+# broken pipe; this hook does not need them.
+cat >/dev/null 2>&1
+
+cd "$(git rev-parse --show-toplevel)" || exit 0
+
+# --- Find a way to run the project's Python tools --------------------------
+# Prefer the project's own .venv: it is what `uv sync` built, and using it
+# directly does not re-sync anything during a push. Fall back to `uv run`.
+if [ -x ".venv/Scripts/python.exe" ]; then
+    PY=".venv/Scripts/python.exe"
+    LINT_IMPORTS=".venv/Scripts/lint-imports.exe"
+elif [ -x ".venv/bin/python" ]; then
+    PY=".venv/bin/python"
+    LINT_IMPORTS=".venv/bin/lint-imports"
+elif command -v uv >/dev/null 2>&1; then
+    PY="uv run python"
+    LINT_IMPORTS="uv run lint-imports"
+else
+    echo ""
+    echo "pre-push: could not find .venv or uv, so the CI checks were NOT run."
+    echo "pre-push: run 'uv sync' once, then push again to get the checks."
+    echo ""
+    exit 0
+fi
+
+TMP="$(mktemp -d 2>/dev/null || mktemp -d -t prepush)"
+trap 'rm -rf "$TMP"' EXIT
+
+echo ""
+echo "pre-push: running the fast CI checks (format, lint, types, layers)..."
+
+# --- Run each check, keeping its output ------------------------------------
+$PY -m ruff format --check . >"$TMP/format.txt" 2>&1
+FORMAT_RC=$?
+$PY -m ruff check . --output-format=concise >"$TMP/lint.txt" 2>&1
+LINT_RC=$?
+$PY -m mypy >"$TMP/mypy.txt" 2>&1
+MYPY_RC=$?
+$LINT_IMPORTS >"$TMP/imports.txt" 2>&1
+IMPORTS_RC=$?
+
+if [ $FORMAT_RC -eq 0 ] && [ $LINT_RC -eq 0 ] && [ $MYPY_RC -eq 0 ] && [ $IMPORTS_RC -eq 0 ]; then
+    echo "pre-push: all fast CI checks pass. (Tests run only in CI -- about 10 minutes.)"
+    echo ""
+    exit 0
+fi
+
+LINE="======================================================================"
+echo ""
+echo "$LINE"
+echo "WARNING: push completed, but CI on GitHub WILL FAIL."
+echo "$LINE"
+
+if [ $FORMAT_RC -ne 0 ]; then
+    COUNT=$(grep -Eo '[0-9]+ files? would be reformatted' "$TMP/format.txt" | grep -Eo '^[0-9]+')
+    echo "ruff format  : ${COUNT:-some} file(s) not formatted"
+fi
+
+if [ $LINT_RC -ne 0 ]; then
+    TOTAL=$(grep -Eo 'Found [0-9]+ error' "$TMP/lint.txt" | grep -Eo '[0-9]+')
+    echo "ruff check   : ${TOTAL:-some} problem(s)"
+    # One line per rule: code, how many times, and the first message seen.
+    grep -E ':[0-9]+:[0-9]+: [A-Z]+[0-9]+ ' "$TMP/lint.txt" \
+        | sed -E 's/^.*:[0-9]+:[0-9]+: ([A-Z]+[0-9]+) (.*)$/\1\t\2/' \
+        | awk -F'\t' '{ n[$1]++; if (!($1 in msg)) msg[$1] = $2 }
+                      END { for (c in n) printf "%6d  %-8s %s\n", n[c], c, substr(msg[c], 1, 52) }' \
+        | sort -rn | head -12 | sed 's/^/   /'
+    echo "   ...files with the most problems:"
+    grep -E ':[0-9]+:[0-9]+: [A-Z]+[0-9]+ ' "$TMP/lint.txt" \
+        | sed -E 's/:[0-9]+:[0-9]+: .*$//' \
+        | sort | uniq -c | sort -rn | head -5 | sed 's/^/     /'
+fi
+
+if [ $MYPY_RC -ne 0 ]; then
+    SUMMARY=$(tail -n 1 "$TMP/mypy.txt")
+    echo "mypy         : $SUMMARY"
+fi
+
+if [ $IMPORTS_RC -ne 0 ]; then
+    SUMMARY=$(grep -E 'Contracts:' "$TMP/imports.txt")
+    echo "lint-imports : ${SUMMARY:-layer contracts broken}"
+fi
+
+cat <<'EXPLAIN'
+
+What this means:
+  Docstring  = the text under a `def` that says what the function does
+               and why it exists.
+  Annotation = the type labels on a function, e.g. `def f(x: int) -> str:`.
+  This project requires both on every public function, method and class,
+  including in tools/. CI checks this and turns red when one is missing.
+  The code may run fine -- CI fails on the missing labels, not on behaviour.
+
+How to fix:
+  In the agent chat run:  /ci-check
+  It formats, fixes what it can, writes the missing docstrings and
+  annotations, and runs every check. Then commit and push again.
+  Rules for agents are in AGENTS.md.
+EXPLAIN
+echo "$LINE"
+echo ""
+
+exit 0
