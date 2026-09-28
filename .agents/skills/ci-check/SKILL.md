@@ -10,10 +10,14 @@ weakening the checks. Read `AGENTS.md` first — the code rules there are what C
 
 ## Hard rules for this skill
 
-- **Do not add `# noqa` or `# type: ignore`.** Fix the code instead.
+- **Do not use `# noqa` or `# type: ignore` to skip work.** Fix the code instead. The only
+  exception is a false positive — a rule that is wrong about one exact line. Then silence only
+  that code, on that line, with the reason: `# noqa: N802 - CSP API name`. Step 6 lists the
+  known cases.
 - **Do not edit the rule lists in `pyproject.toml`.** The rules stay as they are.
 - **Do not rename public functions, methods or classes**, and do not change behaviour. This is an
-  annotation and documentation pass, not a refactor.
+  annotation and documentation pass, not a refactor. When a rule forces you to split a long
+  function, the output must stay exactly the same.
 - **Do not invent facts in a docstring.** Describe only what the code visibly does. If the purpose
   of a function is unclear, read its callers before writing about it.
 
@@ -95,10 +99,30 @@ Common ones in this repository:
 |---|---|
 | `EM101`, `EM102` | Put the message in a variable, then `raise SomeError(message)`. |
 | `E501` | Break the line; keep it at most 100 characters. |
-| `PLC0415` | Move the `import` to the top of the file. |
+| `PLC0415` | Move the `import` to the top of the file. An optional package goes in a top-level `try: … except ImportError:` block. |
 | `PLR2004` | Replace the bare number with a named module constant. |
-| `F841`, `ARG002` | Remove the unused variable or argument — **only** if nothing calls it with that argument. If callers pass it, keep it and prefix it with `_`. |
+| `F841` | Remove the unused variable. |
+| `ARG001`, `ARG002`, `ARG005` | If something outside our Python code decides the arguments (Lua calls it, a callback, an override), keep the argument and prefix it with `_`. If only our own code passes it, remove it and update every caller. |
 | `UP006`, `UP035` | Use `list`, `dict`, `X | None` instead of `typing.List`, `Dict`, `Optional`. |
+| `TID252` | Use an absolute import: `from tools.csp_debugger.x import y`. |
+| `RUF001`, `RUF002`, `RUF003` | Translate the Russian text to English. |
+| `PLR0912`, `PLR0915` | Split the function into private helpers, one per step. Keep every message and every result the same. |
+| `TRY300` | Move the `return` out of the `try` into an `else:` block. |
+| `TRY004` | Raise `TypeError` for a wrong type, and add it to the docstring's `Raises:`. |
+| `SIM102`, `SIM105` | Merge the nested `if`; use `contextlib.suppress(Error)` instead of `try`/`except`/`pass`. |
+| `PTH108` and other `PTH` | Use `pathlib`: `Path(p).unlink()` instead of `os.unlink(p)`. |
+| `PLW1510` | Add `check=False` to `subprocess.run` when the code reads the return code itself. |
+
+**Known false positives.** Only these get a `# noqa` with a reason:
+
+| Code | When |
+|---|---|
+| `N802` | A mock or wrapper that must keep a camelCase name because Lua or Qt calls it by that name. |
+| `S603` | `subprocess.run` with a fixed argument list and no shell, run by the developer. |
+| `S105` | An enum value like `PASS = "PASS"` — a verdict, not a password. |
+| `S108` | A fake `/tmp/...` path in a mock that nothing writes to. |
+
+Anything else: fix the code. If you believe a new case is a false positive, stop and ask the user.
 
 When unsure what a code means, run `PY -m ruff rule CODE`.
 

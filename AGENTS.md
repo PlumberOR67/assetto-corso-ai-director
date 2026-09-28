@@ -54,10 +54,25 @@ CI runs `ruff` with a strict rule set. Code that works but breaks these rules tu
    ```
 
 4. **Lines are at most 100 characters.** Imports go at the top of the file. Numbers with meaning
-   become named constants.
+   become named constants. Imports are absolute: `from tools.csp_debugger.x import y`, never
+   `from .x import y`.
 
-5. **Never silence the checker.** No `# noqa`, no `# type: ignore`, no edits to the rule lists in
-   `pyproject.toml`. Fix the code instead.
+5. **Write comments, docstrings and strings in English.** Cyrillic letters look like Latin ones,
+   and ruff (`RUF001`–`RUF003`) flags every one of them.
+
+6. **Do not silence the checker to skip work.** Never use `# noqa` or `# type: ignore` to skip a
+   docstring, an annotation or any problem you can fix. Never edit the rule lists in
+   `pyproject.toml`.
+
+   The one exception is a rule that is wrong about one exact line — a false positive. For
+   example, a mock of the CSP API must keep the name `getSim`, because Lua calls it by that name.
+   Then silence only that one code, on that one line, and always give the reason:
+
+   ```python
+   def getSim(self) -> MockSim:  # noqa: N802 - CSP API name
+   ```
+
+   The code in `src/` already follows this pattern.
 
 ## Checks — run all five before you push
 

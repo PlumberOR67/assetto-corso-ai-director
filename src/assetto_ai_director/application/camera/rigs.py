@@ -596,11 +596,9 @@ def _filter_by_terrain(placement: RigPlacement, terrain: TerrainGrid | None) -> 
             keep[i] = False
             continue
 
-        # Check sight line — use the target as the sight destination
-        target_x = float(targets[i][0])
-        target_y = float(targets[i][1])
-        target_z = float(targets[i][2])
-        sight = terrain.sight_clear(x, y, z, target_x, target_y, target_z)
+        # Check sight line. The scan measured it to the centreline, not to this
+        # rig's target, so this rejects positions that cannot see the road at all.
+        sight = terrain.sight_clear(x, z)
         if sight is False:  # None means unknown, let it pass
             keep[i] = False
 

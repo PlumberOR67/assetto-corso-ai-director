@@ -220,7 +220,13 @@ def diagnose_cameras(
     profiles = {car_id: distance_profile(position) for car_id, position in tracks.positions.items()}
     cameras = tuple(
         _diagnose_shot(
-            shot, tracks, profiles, exported_spans=exported_spans, track=track, terrain=terrain, aspect=aspect
+            shot,
+            tracks,
+            profiles,
+            exported_spans=exported_spans,
+            track=track,
+            terrain=terrain,
+            aspect=aspect,
         )
         for shot in timeline.shots
     )
@@ -698,7 +704,9 @@ def _check_span(
     )
 
 
-def _check_on_surface(middle: CameraKeyframe, track: TrackSpline | None, terrain: TerrainGrid | None) -> Check:
+def _check_on_surface(
+    middle: CameraKeyframe, track: TrackSpline | None, terrain: TerrainGrid | None
+) -> Check:
     """Check that the camera is not below the road beside it.
 
     The nearest thing to "the camera is buried" that a centreline can answer. It
@@ -733,11 +741,14 @@ def _check_on_surface(middle: CameraKeyframe, track: TrackSpline | None, terrain
             delta = y - ground
             return Check(
                 name="camera_on_surface",
-                status=_band_low(delta, fail_below=_BELOW_SURFACE_FAIL, warn_below=_BELOW_SURFACE_WARN),
+                status=_band_low(
+                    delta, fail_below=_BELOW_SURFACE_FAIL, warn_below=_BELOW_SURFACE_WARN
+                ),
                 value=delta,
                 unit="m",
                 threshold=(
-                    f"fail below {_BELOW_SURFACE_FAIL:.2f} m, warn below {_BELOW_SURFACE_WARN:.2f} m"
+                    f"fail below {_BELOW_SURFACE_FAIL:.2f} m, "
+                    f"warn below {_BELOW_SURFACE_WARN:.2f} m"
                 ),
                 detail=(
                     f"The camera stands {delta:+.2f} m relative to the scanned ground. "
@@ -866,7 +877,7 @@ def _check_sight_line(middle: CameraKeyframe, terrain: TerrainGrid | None) -> Ch
         )
 
     pos = middle.basis.position
-    x, y, z = float(pos.x), float(pos.y), float(pos.z)
+    x, z = float(pos.x), float(pos.z)
 
     # For sight line we need a target — the subject car's position. Without it,
     # we can only report the general sight quality at the camera's location.
@@ -875,7 +886,7 @@ def _check_sight_line(middle: CameraKeyframe, terrain: TerrainGrid | None) -> Ch
     # TODO: accept subject position parameter for targeted sight check.
 
     # Find nearest cell and report its sight status
-    best_dist = float('inf')
+    best_dist = float("inf")
     best_cell = None
     for cell in terrain.cells:
         dx = cell.position.x - x

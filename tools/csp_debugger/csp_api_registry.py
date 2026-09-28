@@ -1,170 +1,168 @@
-# Реестр CSP API функций
-# Формат: namespace.function -> {version, context, description, required}
+"""Registry of the CSP API functions the Lua validator knows about.
+
+Each entry maps ``namespace.function`` to ``{version, context, description,
+required, returns}``. The validator reports any call that is not listed here as
+unknown, so a function missing from this table is a warning, not an error.
+"""
 
 CSP_API_REGISTRY = {
     # ac.* namespace
     "ac.getPatchVersion": {
         "version": "0.1.0+",
         "context": "always",
-        "description": "Получить версию CSP",
+        "description": "Get the CSP version",
         "required": True,
-        "returns": "int"
+        "returns": "int",
     },
     "ac.getSim": {
         "version": "0.1.0+",
         "context": "always",
-        "description": "Получить объект симуляции",
+        "description": "Get the simulation object",
         "required": False,
-        "returns": "SimObject"
+        "returns": "SimObject",
     },
     "ac.getTrackSpline": {
         "version": "0.1.78+",
         "context": "replay,live",
-        "description": "Получить сплайн трассы",
+        "description": "Get the track spline",
         "required": False,
-        "returns": "TrackSpline"
+        "returns": "TrackSpline",
     },
     "ac.getTrackName": {
         "version": "0.1.0+",
         "context": "always",
-        "description": "Получить имя трассы",
+        "description": "Get the track name",
         "required": False,
-        "returns": "string"
+        "returns": "string",
     },
     "ac.getLayoutName": {
         "version": "0.1.0+",
         "context": "always",
-        "description": "Получить имя лейаута",
+        "description": "Get the layout name",
         "required": False,
-        "returns": "string"
+        "returns": "string",
     },
     "ac.getDocumentsPath": {
         "version": "0.1.0+",
         "context": "always",
-        "description": "Получить путь к Documents",
+        "description": "Get the path to Documents",
         "required": False,
-        "returns": "string"
+        "returns": "string",
     },
     "ac.grabCamera": {
         "version": "0.1.78+",
         "context": "replay,live",
-        "description": "Захватить контроль над камерой",
+        "description": "Take control of the camera",
         "required": False,
-        "returns": "CameraObject"
+        "returns": "CameraObject",
     },
     "ac.log": {
         "version": "0.1.0+",
         "context": "always",
-        "description": "Вывести в лог",
+        "description": "Write to the log",
         "required": False,
-        "returns": "void"
+        "returns": "void",
     },
-
     # render.* namespace
     "render.createRay": {
         "version": "0.2.0+",
         "context": "replay,live",
-        "description": "Создать луч для raycasting",
+        "description": "Create a ray for raycasting",
         "required": False,
-        "returns": "RayObject"
+        "returns": "RayObject",
     },
-
     # Ray methods
     "ray:physics": {
         "version": "0.2.0+",
         "context": "replay,live",
-        "description": "Проверить пересечение с физикой",
+        "description": "Test the ray against physics",
         "required": False,
-        "returns": "hitPos, hitNormal"
+        "returns": "hitPos, hitNormal",
     },
     "ray:track": {
         "version": "0.2.0+",
         "context": "replay,live",
-        "description": "Проверить пересечение с трассой",
+        "description": "Test the ray against the track",
         "required": False,
-        "returns": "distance"
+        "returns": "distance",
     },
     "ray:position": {
         "version": "0.2.0+",
         "context": "replay,live",
-        "description": "Получить позицию попадания",
+        "description": "Get the hit position",
         "required": False,
-        "returns": "vec3"
+        "returns": "vec3",
     },
     "ray:normal": {
         "version": "0.2.0+",
         "context": "replay,live",
-        "description": "Получить нормаль поверхности",
+        "description": "Get the surface normal",
         "required": False,
-        "returns": "vec3"
+        "returns": "vec3",
     },
-
     # ui.* namespace
     "ui.text": {
         "version": "0.1.0+",
         "context": "always",
-        "description": "Вывести текст в UI",
+        "description": "Draw text in the UI",
         "required": False,
-        "returns": "void"
+        "returns": "void",
     },
     "ui.textWrapped": {
         "version": "0.1.0+",
         "context": "always",
-        "description": "Вывести текст с переносом",
+        "description": "Draw wrapped text",
         "required": False,
-        "returns": "void"
+        "returns": "void",
     },
     "ui.button": {
         "version": "0.1.0+",
         "context": "always",
-        "description": "Создать кнопку",
+        "description": "Draw a button",
         "required": False,
-        "returns": "bool"
+        "returns": "bool",
     },
     "ui.separator": {
         "version": "0.1.0+",
         "context": "always",
-        "description": "Разделитель в UI",
+        "description": "UI separator",
         "required": False,
-        "returns": "void"
+        "returns": "void",
     },
-
-    # sim.* namespace (через ac.getSim())
+    # sim.* namespace (through ac.getSim())
     "sim.isReplayActive": {
         "version": "0.1.0+",
         "context": "always",
-        "description": "Проверить, активен ли реплей",
+        "description": "Whether a replay is playing",
         "required": False,
-        "returns": "bool"
+        "returns": "bool",
     },
     "sim.timeSeconds": {
         "version": "0.1.0+",
         "context": "replay,live",
-        "description": "Текущее время сессии",
+        "description": "Current session time",
         "required": False,
-        "returns": "float"
+        "returns": "float",
     },
-
     # vec3 type
     "vec3": {
         "version": "0.1.0+",
         "context": "always",
-        "description": "Векторный тип",
+        "description": "Vector type",
         "required": False,
-        "returns": "vec3"
+        "returns": "vec3",
     },
-
     # setTimeout
     "setTimeout": {
         "version": "0.1.0+",
         "context": "always",
-        "description": "Вызвать функцию через задержку",
+        "description": "Call a function after a delay",
         "required": False,
-        "returns": "void"
-    }
+        "returns": "void",
+    },
 }
 
-# Функции, которые требуют особого контекста
+# Functions that need a particular context
 CONTEXT_RESTRICTED = {
     "ac.getTrackSpline": ["replay", "live"],
     "ac.grabCamera": ["replay", "live"],
@@ -173,7 +171,7 @@ CONTEXT_RESTRICTED = {
     "ray:track": ["replay", "live"],
 }
 
-# Функции, которые могут отсутствовать в старых версиях
+# Functions that may be missing in older versions
 VERSION_RESTRICTED = {
     "0.2.0+": [
         "render.createRay",
@@ -185,5 +183,5 @@ VERSION_RESTRICTED = {
     "0.1.78+": [
         "ac.getTrackSpline",
         "ac.grabCamera",
-    ]
+    ],
 }

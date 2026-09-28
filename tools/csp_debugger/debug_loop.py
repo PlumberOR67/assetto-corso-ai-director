@@ -1,5 +1,4 @@
-"""
-Autonomous debug loop for CSP Lua validation.
+"""Autonomous debug loop for CSP Lua validation.
 
 Runs the validation pipeline, analyzes failures, applies conservative fixes,
 and re-validates. Stops after MAX_ATTEMPTS or when no safe fix is possible.
@@ -13,13 +12,12 @@ Safety rules:
 - UNAVAILABLE from syntax checker means the tool is missing, not that code is wrong.
 """
 
+import argparse
 import json
 import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional
-
 
 MAX_ATTEMPTS = 5
 
@@ -27,16 +25,22 @@ MAX_ATTEMPTS = 5
 class DebugLoop:
     """Autonomous CSP Lua debug loop with safety limits."""
 
-    def __init__(self, app_dir: Path, project_root: Path, python_bin: Optional[str] = None,
-                 max_attempts: int = 5, skip_tests: bool = False):
+    def __init__(
+        self,
+        app_dir: Path,
+        project_root: Path,
+        python_bin: str | None = None,
+        max_attempts: int = 5,
+        skip_tests: bool = False,
+    ) -> None:
         self.app_dir = Path(app_dir).resolve()
         self.project_root = Path(project_root).resolve()
         self.python_bin = python_bin or sys.executable
         self.max_attempts = max_attempts
         self.skip_tests = skip_tests
         self.attempt_count = 0
-        self.attempt_history: List[Dict] = []
-        self._lua_file: Optional[Path] = None
+        self.attempt_history: list[dict] = []
+        self._lua_file: Path | None = None
 
     def _find_lua_file(self) -> Path:
         """Find the main Lua file from manifest.ini."""
@@ -44,8 +48,8 @@ class DebugLoop:
             return self._lua_file
         manifest = self.app_dir / "manifest.ini"
         if manifest.exists():
-            content = manifest.read_text(encoding='utf-8')
-            m = re.search(r'LUA_FILE\s*=\s*(.+)', content)
+            content = manifest.read_text(encoding="utf-8")
+            m = re.search(r"LUA_FILE\s*=\s*(.+)", content)
             if m:
                 self._lua_file = self.app_dir / m.group(1).strip()
                 return self._lua_file
@@ -54,19 +58,26 @@ class DebugLoop:
         if lua_files:
             self._lua_file = lua_files[0]
             return self._lua_file
-        raise FileNotFoundError(f"No Lua file found in {self.app_dir}")
+        message = f"No Lua file found in {self.app_dir}"
+        raise FileNotFoundError(message)
 
-    def run_pipeline(self) -> Dict:
+    def run_pipeline(self) -> dict:
         """Run validation pipeline and return JSON results."""
         pipeline_cmd = [
-            self.python_bin, "-X", "utf8",
-            "-m", "tools.csp_debugger.validate_pipeline",
+            self.python_bin,
+            "-X",
+            "utf8",
+            "-m",
+            "tools.csp_debugger.validate_pipeline",
             "--json",
             str(self.app_dir),
         ]
 
-        result = subprocess.run(
+        # The command is this project's own pipeline module, run by the developer's
+        # interpreter, with no shell. Nothing here comes from untrusted input.
+        result = subprocess.run(  # noqa: S603 - fixed module, no shell
             pipeline_cmd,
+            check=False,
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -85,8 +96,9 @@ class DebugLoop:
         """Run the project's Python tests from the project root."""
         print("\n=== Running Python tests ===", file=sys.stderr)
         try:
-            result = subprocess.run(
+            result = subprocess.run(  # noqa: S603 - fixed pytest command, no shell
                 [self.python_bin, "-m", "pytest", "-x", "--tb=short", "-q"],
+                check=False,
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
@@ -97,26 +109,27 @@ class DebugLoop:
                 print(result.stdout, file=sys.stderr)
             if result.stderr:
                 print(result.stderr, file=sys.stderr)
-            return result.returncode == 0
         except subprocess.TimeoutExpired:
             print("[ERROR] Python tests timed out after 180 seconds", file=sys.stderr)
             return False
         except Exception as e:
             print(f"[ERROR] Failed to run Python tests: {e}", file=sys.stderr)
             return False
+        else:
+            return result.returncode == 0
 
     @staticmethod
-    def _parse_syntax_error(detail: str) -> Optional[Dict]:
+    def _parse_syntax_error(detail: str) -> dict | None:
         """Parse a lupa syntax error detail into (line, expected, near).
 
         Format: "<tmpfile>:<line>: '<X>' expected (to close '<Y>' at line N) near '<Z>'"
         or:     "<tmpfile>:<line>: unexpected symbol near '<Z>'"
         """
         # Try: '<X>' expected near '<Z>'
-        m = re.search(r':(\d+):\s*[\'\"]([^\']+)[\'\"]\s*expected', detail)
+        m = re.search(r":(\d+):\s*[\'\"]([^\']+)[\'\"]\s*expected", detail)
         if not m:
             # Try: unexpected symbol near '<Z>'
-            m = re.search(r':(\d+):\s*unexpected symbol', detail)
+            m = re.search(r":(\d+):\s*unexpected symbol", detail)
             if m:
                 line = int(m.group(1))
                 near_m = re.search(r"near\s*[\'\"]([^\']+)[\'\"]", detail)
@@ -149,8 +162,8 @@ class DebugLoop:
         near = parsed["near"]
         lua_file = self._find_lua_file()
 
-        content = lua_file.read_text(encoding='utf-8')
-        lines = content.split('\n')
+        content = lua_file.read_text(encoding="utf-8")
+        lines = content.split("\n")
 
         # Lupa reports 1-based line. The error is ON that line.
         # For missing ')', 'then', 'do' — the fix goes at the end of the
@@ -161,13 +174,13 @@ class DebugLoop:
             return False
 
         fix_map = {
-            ')': ')',
-            'then': ' then',
-            'do': ' do',
-            'end': ' end',
-            ']': ']',
-            '}': '}',
-            'symbol': None,  # ambiguous — needs manual review
+            ")": ")",
+            "then": " then",
+            "do": " do",
+            "end": " end",
+            "]": "]",
+            "}": "}",
+            "symbol": None,  # ambiguous — needs manual review
         }
 
         fix_token = fix_map.get(expected)
@@ -182,11 +195,13 @@ class DebugLoop:
             return False
 
         lines[target_idx] = target_line + fix_token
-        lua_file.write_text('\n'.join(lines), encoding='utf-8')
-        print(f"  [FIX] Added '{fix_token.strip()}' at end of line {target_idx + 1}", file=sys.stderr)
+        lua_file.write_text("\n".join(lines), encoding="utf-8")
+        print(
+            f"  [FIX] Added '{fix_token.strip()}' at end of line {target_idx + 1}", file=sys.stderr
+        )
         return True
 
-    def analyze_and_fix(self, results: List[Dict]) -> bool:
+    def analyze_and_fix(self, results: list[dict]) -> bool:
         """Attempt to fix FAIL results. Returns True if any fix was applied."""
         fixed_any = False
         for result in results:
@@ -218,7 +233,7 @@ class DebugLoop:
     def run(self) -> bool:
         """Main debug loop. Returns True if everything passed."""
         print(f"\n{'=' * 60}", file=sys.stderr)
-        print(f"CSP Lua Debug Loop", file=sys.stderr)
+        print("CSP Lua Debug Loop", file=sys.stderr)
         print(f"App: {self.app_dir}", file=sys.stderr)
         print(f"Max attempts: {MAX_ATTEMPTS}", file=sys.stderr)
         print(f"{'=' * 60}\n", file=sys.stderr)
@@ -231,14 +246,19 @@ class DebugLoop:
             has_failures = results_json.get("has_failures", False)
             results = results_json.get("results", [])
 
-            self.attempt_history.append({
-                "attempt": self.attempt_count,
-                "has_failures": has_failures,
-                "results_count": len(results),
-            })
+            self.attempt_history.append(
+                {
+                    "attempt": self.attempt_count,
+                    "has_failures": has_failures,
+                    "results_count": len(results),
+                }
+            )
 
             if not has_failures:
-                print(f"\n[LUA PASS] Validation passed on attempt {self.attempt_count}", file=sys.stderr)
+                print(
+                    f"\n[LUA PASS] Validation passed on attempt {self.attempt_count}",
+                    file=sys.stderr,
+                )
                 # Show REQUIRES_GAME notes
                 for r in results:
                     if r.get("status") == "REQUIRES_GAME":
@@ -247,7 +267,7 @@ class DebugLoop:
                 break
 
             # Show failures
-            print(f"\n[FAIL] Validation failed:", file=sys.stderr)
+            print("\n[FAIL] Validation failed:", file=sys.stderr)
             for r in results:
                 if r.get("status") == "FAIL":
                     print(f"  - {r['check']}", file=sys.stderr)
@@ -257,9 +277,12 @@ class DebugLoop:
             # Try to fix
             fixed = self.analyze_and_fix(results)
             if not fixed:
-                print(f"\n[STOP] No safe fix available — manual intervention required", file=sys.stderr)
+                print(
+                    "\n[STOP] No safe fix available — manual intervention required",
+                    file=sys.stderr,
+                )
                 return False
-            print(f"\n-> Re-validating...", file=sys.stderr)
+            print("\n-> Re-validating...", file=sys.stderr)
 
         if has_failures and self.attempt_count >= MAX_ATTEMPTS:
             print(f"\n[STOP] Max attempts ({MAX_ATTEMPTS}) reached", file=sys.stderr)
@@ -267,18 +290,23 @@ class DebugLoop:
 
         # Lua passed — now run Python tests (unless skipped)
         if self.skip_tests:
-            print(f"\n[SKIP] Python tests skipped (--skip-tests)", file=sys.stderr)
+            print("\n[SKIP] Python tests skipped (--skip-tests)", file=sys.stderr)
             return True
 
         tests_ok = self.run_python_tests()
         if not tests_ok:
-            print(f"\n[FAIL] Python tests failed", file=sys.stderr)
+            print("\n[FAIL] Python tests failed", file=sys.stderr)
             return False
 
-        print(f"\n[DONE] Lua validation + Python tests passed", file=sys.stderr)
+        print("\n[DONE] Lua validation + Python tests passed", file=sys.stderr)
         return True
 
-    def get_report(self) -> Dict:
+    def get_report(self) -> dict:
+        """Summarise the attempts the loop made.
+
+        Returns:
+            The attempt count, the attempt limit and one entry per attempt.
+        """
         return {
             "attempts": self.attempt_count,
             "max_attempts": MAX_ATTEMPTS,
@@ -286,15 +314,18 @@ class DebugLoop:
         }
 
 
-def main():
-    import argparse
-
+def main() -> None:
+    """Run the debug loop from the command line and exit with its result."""
     parser = argparse.ArgumentParser(description="Autonomous CSP Lua debug loop")
     parser.add_argument("app_dir", type=Path, help="Path to CSP Lua app directory")
-    parser.add_argument("--project-root", type=Path, default=None, help="Project root (default: cwd)")
+    parser.add_argument(
+        "--project-root", type=Path, default=None, help="Project root (default: cwd)"
+    )
     parser.add_argument("--python", type=str, default=None, help="Python binary")
     parser.add_argument("--max-attempts", type=int, default=5)
-    parser.add_argument("--skip-tests", action="store_true", help="Skip Python tests (Lua validation only)")
+    parser.add_argument(
+        "--skip-tests", action="store_true", help="Skip Python tests (Lua validation only)"
+    )
 
     args = parser.parse_args()
 
@@ -304,13 +335,7 @@ def main():
 
     project_root = args.project_root or Path.cwd()
 
-    loop = DebugLoop(
-        args.app_dir,
-        project_root,
-        args.python,
-        args.max_attempts,
-        args.skip_tests
-    )
+    loop = DebugLoop(args.app_dir, project_root, args.python, args.max_attempts, args.skip_tests)
     success = loop.run()
     report = loop.get_report()
 

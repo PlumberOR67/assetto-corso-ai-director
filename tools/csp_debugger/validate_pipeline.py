@@ -1,26 +1,30 @@
-"""
-Main validation pipeline.
-Запускает все проверки и собирает единый отчёт.
+"""Main validation pipeline.
+
+Runs every check and collects one report.
 """
 
-import sys
+import argparse
+import json
 import os
-from pathlib import Path
-from typing import List, Dict, Any
+import re
+import sys
 from enum import Enum
+from pathlib import Path
 
 # Force UTF-8 encoding for Windows console
-if sys.platform == 'win32':
-    os.environ['PYTHONIOENCODING'] = 'utf-8'
-    sys.stdout.reconfigure(encoding='utf-8')
+if sys.platform == "win32":
+    os.environ["PYTHONIOENCODING"] = "utf-8"
+    sys.stdout.reconfigure(encoding="utf-8")
 
-from .lua_syntax_checker import LuaSyntaxChecker
-from .csp_api_validator import CSPAPIValidator, CSPAPIIssue
-from .project_validator import ProjectValidator, ProjectIssue
+from tools.csp_debugger.csp_api_validator import CSPAPIValidator
+from tools.csp_debugger.lua_syntax_checker import LuaSyntaxChecker
+from tools.csp_debugger.project_validator import ProjectValidator
 
 
 class ValidationStatus(Enum):
-    PASS = "PASS"
+    """The verdict of one check."""
+
+    PASS = "PASS"  # noqa: S105 - a check verdict, not a credential
     FAIL = "FAIL"
     WARNING = "WARNING"
     UNKNOWN = "UNKNOWN"
@@ -28,17 +32,19 @@ class ValidationStatus(Enum):
 
 
 class ValidationResult:
-    """Результат одной проверки."""
-    def __init__(self, check_name: str, status: ValidationStatus, details: List[str]):
+    """The result of one check."""
+
+    def __init__(self, check_name: str, status: ValidationStatus, details: list[str]) -> None:
         self.check_name = check_name
         self.status = status
         self.details = details
 
 
 class ValidationReport:
-    """Полный отчёт валидации."""
-    def __init__(self):
-        self.results = []
+    """The full validation report."""
+
+    def __init__(self) -> None:
+        self.results: list[ValidationResult] = []
         self.summary = {
             "PASS": 0,
             "FAIL": 0,
@@ -47,15 +53,29 @@ class ValidationReport:
             "REQUIRES_GAME": 0,
         }
 
-    def add_result(self, result: ValidationResult):
+    def add_result(self, result: ValidationResult) -> None:
+        """Add one check result and count its status.
+
+        Args:
+            result: The result to add.
+        """
         self.results.append(result)
         self.summary[result.status.value] += 1
 
     def has_failures(self) -> bool:
+        """Whether any check failed.
+
+        Returns:
+            True when at least one result is FAIL.
+        """
         return self.summary["FAIL"] > 0
 
-    def print_report(self):
-        """Вывести отчёт."""
+    def print_report(self) -> int:
+        """Print the report.
+
+        Returns:
+            The process exit code: 1 when a check failed, otherwise 0.
+        """
         print("=" * 80)
         print("CSP LUA VALIDATION REPORT")
         print("=" * 80)
@@ -67,7 +87,7 @@ class ValidationReport:
                 "FAIL": "[FAIL]",
                 "WARNING": "[WARN]",
                 "UNKNOWN": "[??]",
-                "REQUIRES_GAME": "[GAME]"
+                "REQUIRES_GAME": "[GAME]",
             }.get(result.status.value, "[??]")
 
             print(f"{status_icon} {result.check_name}: {result.status.value}")
@@ -85,149 +105,204 @@ class ValidationReport:
         if self.has_failures():
             print("\nValidation FAILED")
             return 1
-        else:
-            print("\nValidation PASSED (with warnings)")
-            return 0
+        print("\nValidation PASSED (with warnings)")
+        return 0
 
 
 def validate_lua_app(app_dir: Path) -> ValidationReport:
-    """Запустить полную валидацию CSP Lua приложения.
+    """Run the full validation of a CSP Lua app.
 
     Args:
-        app_dir: Путь к директории приложения (где manifest.ini)
+        app_dir: Path to the app directory (the one with manifest.ini).
 
     Returns:
-        ValidationReport с результатами всех проверок
+        A ValidationReport with the results of every check.
     """
     report = ValidationReport()
 
-    # Найти основной Lua файл
-    manifest_path = app_dir / "manifest.ini"
-    if not manifest_path.exists():
-        report.add_result(ValidationResult(
-            "Project Structure",
-            ValidationStatus.FAIL,
-            [f"manifest.ini not found in {app_dir}"]
-        ))
+    lua_file = _find_lua_file(app_dir, report)
+    if lua_file is None:
         return report
 
-    # Прочитать manifest для получения имени Lua файла
-    manifest_content = manifest_path.read_text(encoding='utf-8')
-    import re
-    lua_match = re.search(r'LUA_FILE\s*=\s*(.+)', manifest_content)
+    _check_syntax(lua_file, report)
+    _check_api_usage(lua_file, report)
+    _check_project(app_dir, report)
+    _check_error_handling(lua_file, report)
+
+    return report
+
+
+def _find_lua_file(app_dir: Path, report: ValidationReport) -> Path | None:
+    """Find the main Lua file through manifest.ini.
+
+    Args:
+        app_dir: Path to the app directory.
+        report: Receives a FAIL result when the file cannot be found.
+
+    Returns:
+        The main Lua file, or None when it cannot be found.
+    """
+    manifest_path = app_dir / "manifest.ini"
+    if not manifest_path.exists():
+        report.add_result(
+            ValidationResult(
+                "Project Structure", ValidationStatus.FAIL, [f"manifest.ini not found in {app_dir}"]
+            )
+        )
+        return None
+
+    # Read the manifest to get the Lua file name
+    manifest_content = manifest_path.read_text(encoding="utf-8")
+
+    lua_match = re.search(r"LUA_FILE\s*=\s*(.+)", manifest_content)
     if not lua_match:
-        report.add_result(ValidationResult(
-            "Manifest",
-            ValidationStatus.FAIL,
-            ["LUA_FILE not specified in manifest.ini"]
-        ))
-        return report
+        report.add_result(
+            ValidationResult(
+                "Manifest", ValidationStatus.FAIL, ["LUA_FILE not specified in manifest.ini"]
+            )
+        )
+        return None
 
     lua_file = app_dir / lua_match.group(1).strip()
     if not lua_file.exists():
-        report.add_result(ValidationResult(
-            "Lua File",
-            ValidationStatus.FAIL,
-            [f"Lua file not found: {lua_file}"]
-        ))
-        return report
+        report.add_result(
+            ValidationResult("Lua File", ValidationStatus.FAIL, [f"Lua file not found: {lua_file}"])
+        )
+        return None
 
-    # 1. Синтаксическая проверка
+    return lua_file
+
+
+def _check_syntax(lua_file: Path, report: ValidationReport) -> None:
+    """Step 1: check the Lua syntax.
+
+    Args:
+        lua_file: The main Lua file.
+        report: Receives the result.
+    """
     print(f"\n[1/4] Checking syntax: {lua_file.name}", file=sys.stderr)
     syntax_checker = LuaSyntaxChecker()
 
     if not syntax_checker.is_available:
-        report.add_result(ValidationResult(
-            "Syntax Check",
-            ValidationStatus.UNAVAILABLE,
-            ["lupa (LuaJIT binding) not installed — run: uv pip install lupa"]
-        ))
-    else:
-        syntax_errors = syntax_checker.check_file(lua_file)
-        if syntax_errors:
-            details = [str(err) for err in syntax_errors]
-            report.add_result(ValidationResult(
+        report.add_result(
+            ValidationResult(
                 "Syntax Check",
-                ValidationStatus.FAIL,
-                details
-            ))
-        else:
-            report.add_result(ValidationResult(
+                ValidationStatus.UNAVAILABLE,
+                ["lupa (LuaJIT binding) not installed — run: uv pip install lupa"],
+            )
+        )
+        return
+
+    syntax_errors = syntax_checker.check_file(lua_file)
+    if syntax_errors:
+        details = [str(err) for err in syntax_errors]
+        report.add_result(ValidationResult("Syntax Check", ValidationStatus.FAIL, details))
+    else:
+        report.add_result(
+            ValidationResult(
                 "Syntax Check",
                 ValidationStatus.PASS,
-                ["Lua syntax verified via lupa (LuaJIT parser)"]
-            ))
+                ["Lua syntax verified via lupa (LuaJIT parser)"],
+            )
+        )
 
-    # 2. CSP API валидация
-    print(f"[2/4] Validating CSP API usage", file=sys.stderr)
+
+def _check_api_usage(lua_file: Path, report: ValidationReport) -> None:
+    """Step 2: check the CSP API calls.
+
+    Args:
+        lua_file: The main Lua file.
+        report: Receives the results.
+    """
+    print("[2/4] Validating CSP API usage", file=sys.stderr)
     api_validator = CSPAPIValidator()
     api_issues = api_validator.validate_file(lua_file)
 
-    if api_issues:
-        # Разделить по severity
-        fails = [i for i in api_issues if i.severity == "FAIL"]
-        requires_game = [i for i in api_issues if i.severity == "REQUIRES_GAME"]
-        warnings = [i for i in api_issues if i.severity == "WARNING"]
+    if not api_issues:
+        report.add_result(
+            ValidationResult(
+                "CSP API Validation", ValidationStatus.PASS, ["All API calls are valid"]
+            )
+        )
+        return
 
-        if fails:
-            report.add_result(ValidationResult(
-                "CSP API Validation",
-                ValidationStatus.FAIL,
-                [str(i) for i in fails]
-            ))
-        if requires_game:
-            report.add_result(ValidationResult(
+    # Split by severity
+    fails = [i for i in api_issues if i.severity == "FAIL"]
+    requires_game = [i for i in api_issues if i.severity == "REQUIRES_GAME"]
+    warnings = [i for i in api_issues if i.severity == "WARNING"]
+
+    if fails:
+        report.add_result(
+            ValidationResult("CSP API Validation", ValidationStatus.FAIL, [str(i) for i in fails])
+        )
+    if requires_game:
+        report.add_result(
+            ValidationResult(
                 "CSP API Context",
                 ValidationStatus.REQUIRES_GAME,
-                [str(i) for i in requires_game]
-            ))
-        if warnings:
-            report.add_result(ValidationResult(
-                "CSP API Warnings",
-                ValidationStatus.WARNING,
-                [str(i) for i in warnings]
-            ))
-    else:
-        report.add_result(ValidationResult(
-            "CSP API Validation",
-            ValidationStatus.PASS,
-            ["All API calls are valid"]
-        ))
+                [str(i) for i in requires_game],
+            )
+        )
+    if warnings:
+        report.add_result(
+            ValidationResult(
+                "CSP API Warnings", ValidationStatus.WARNING, [str(i) for i in warnings]
+            )
+        )
 
-    # 3. Project validation
-    print(f"[3/4] Validating project structure", file=sys.stderr)
+
+def _check_project(app_dir: Path, report: ValidationReport) -> None:
+    """Step 3: check the project structure.
+
+    Args:
+        app_dir: Path to the app directory.
+        report: Receives the results.
+    """
+    print("[3/4] Validating project structure", file=sys.stderr)
     project_validator = ProjectValidator(app_dir)
     project_issues = project_validator.validate()
 
-    if project_issues:
-        fails = [i for i in project_issues if i.severity == "FAIL"]
-        warnings = [i for i in project_issues if i.severity == "WARNING"]
+    if not project_issues:
+        report.add_result(
+            ValidationResult(
+                "Project Structure", ValidationStatus.PASS, ["Project structure is valid"]
+            )
+        )
+        return
 
-        if fails:
-            report.add_result(ValidationResult(
+    fails = [i for i in project_issues if i.severity == "FAIL"]
+    warnings = [i for i in project_issues if i.severity == "WARNING"]
+
+    if fails:
+        report.add_result(
+            ValidationResult(
                 "Project Structure",
                 ValidationStatus.FAIL,
-                [f"{i.category}: {i.message}" for i in fails]
-            ))
-        if warnings:
-            report.add_result(ValidationResult(
+                [f"{i.category}: {i.message}" for i in fails],
+            )
+        )
+    if warnings:
+        report.add_result(
+            ValidationResult(
                 "Project Warnings",
                 ValidationStatus.WARNING,
-                [f"{i.category}: {i.message}" for i in warnings]
-            ))
-    else:
-        report.add_result(ValidationResult(
-            "Project Structure",
-            ValidationStatus.PASS,
-            ["Project structure is valid"]
-        ))
+                [f"{i.category}: {i.message}" for i in warnings],
+            )
+        )
 
-    # 4. Error handling check
-    print(f"[4/4] Checking error handling", file=sys.stderr)
-    content = lua_file.read_text(encoding='utf-8')
 
-    pcall_count = content.count('pcall(')
-    nil_checks = content.count('== nil') + content.count('~= nil')
+def _check_error_handling(lua_file: Path, report: ValidationReport) -> None:
+    """Step 4: count pcall() calls and nil checks.
+
+    Args:
+        lua_file: The main Lua file.
+        report: Receives the result.
+    """
+    print("[4/4] Checking error handling", file=sys.stderr)
+    content = lua_file.read_text(encoding="utf-8")
+
+    pcall_count = content.count("pcall(")
+    nil_checks = content.count("== nil") + content.count("~= nil")
 
     error_details = []
     if pcall_count > 0:
@@ -241,28 +316,20 @@ def validate_lua_app(app_dir: Path) -> ValidationReport:
         error_details.append("No nil checks found")
 
     if pcall_count > 0 and nil_checks > 0:
-        report.add_result(ValidationResult(
-            "Error Handling",
-            ValidationStatus.PASS,
-            error_details
-        ))
+        report.add_result(ValidationResult("Error Handling", ValidationStatus.PASS, error_details))
     else:
-        report.add_result(ValidationResult(
-            "Error Handling",
-            ValidationStatus.WARNING,
-            error_details
-        ))
-
-    return report
+        report.add_result(
+            ValidationResult("Error Handling", ValidationStatus.WARNING, error_details)
+        )
 
 
-def main():
-    """CLI entry point."""
-    import argparse
-
+def main() -> None:
+    """Run the validation from the command line and exit with its result."""
     parser = argparse.ArgumentParser(description="CSP Lua validation pipeline")
     parser.add_argument("app_dir", type=Path, help="Path to CSP Lua app directory")
-    parser.add_argument("--json", action="store_true", help="Output JSON to stdout (human-readable to stderr)")
+    parser.add_argument(
+        "--json", action="store_true", help="Output JSON to stdout (human-readable to stderr)"
+    )
 
     args = parser.parse_args()
 
@@ -274,7 +341,6 @@ def main():
 
     if args.json:
         # JSON output to stdout, progress to stderr
-        import json
         data = {
             "results": [
                 {

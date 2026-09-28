@@ -17,13 +17,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-import numpy as np
-
 from assetto_ai_director.domain.geometry import Vec3
 from assetto_ai_director.domain.provenance import Provenance
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    pass
 
 __all__ = ["TerrainCell", "TerrainGrid"]
 
@@ -112,11 +110,11 @@ class TerrainGrid:
             IndexError: If indices are out of bounds.
         """
         if station < 0 or station >= self.station_count:
-            raise IndexError(f"Station {station} out of range [0, {self.station_count})")
+            message = f"Station {station} out of range [0, {self.station_count})"
+            raise IndexError(message)
         if profile < 0 or profile >= self.profile_points_per_station:
-            raise IndexError(
-                f"Profile {profile} out of range [0, {self.profile_points_per_station})"
-            )
+            message = f"Profile {profile} out of range [0, {self.profile_points_per_station})"
+            raise IndexError(message)
         return station * self.profile_points_per_station + profile
 
     def get_cell(self, station: int, profile: int) -> TerrainCell:
@@ -147,7 +145,7 @@ class TerrainGrid:
         Returns:
             Ground height in metres, or None if no cell has a measurement.
         """
-        best_dist = float('inf')
+        best_dist = float("inf")
         best_height = None
 
         for cell in self.cells:
@@ -172,7 +170,7 @@ class TerrainGrid:
         Returns:
             Surface normal vector, or None if no cell has a measurement.
         """
-        best_dist = float('inf')
+        best_dist = float("inf")
         best_normal = None
 
         for cell in self.cells:
@@ -206,25 +204,24 @@ class TerrainGrid:
             return False  # unknown, not underground
         return y < ground - tolerance
 
-    def sight_clear(self, x: float, y: float, z: float, target_x: float, target_y: float, target_z: float) -> bool | None:
-        """Check whether sight from a point to a target is unobstructed.
+    def sight_clear(self, x: float, z: float) -> bool | None:
+        """Report the sight line the scanner recorded nearest to a point.
 
         Uses the pre-measured sight data from the nearest grid cell. This does
-        NOT cast a new ray — it reads what the Lua scanner recorded.
+        NOT cast a new ray — it reads what the Lua scanner recorded, and the
+        scanner measured sight from each cell to the centreline. It says nothing
+        about any other target, so it takes no target: accepting one it could
+        not use would let a caller believe it had checked something it had not.
 
         Args:
             x: World x coordinate of the viewpoint in metres.
-            y: World y coordinate of the viewpoint in metres.
             z: World z coordinate of the viewpoint in metres.
-            target_x: Target x coordinate in metres.
-            target_y: Target y coordinate in metres.
-            target_z: Target z coordinate in metres.
 
         Returns:
             True if sight is clear, False if obstructed, None if not measured.
         """
         # Find nearest cell
-        best_dist = float('inf')
+        best_dist = float("inf")
         best_cell = None
 
         for cell in self.cells:
